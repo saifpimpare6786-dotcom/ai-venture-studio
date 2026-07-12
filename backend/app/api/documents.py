@@ -16,9 +16,7 @@ async def upload_document(
     project_id: str = Form(..., description="The associated project UUID"),
     category: str = Form(..., description="The upload type (e.g. Pitch Deck, Competitor Analysis)"),
     file: UploadFile = File(..., description="The document file stream"),
-    # TODO: Re-enable auth validation before deployment
-    # For local testing only, we bypass get_current_user and project checks.
-    # current_user = Depends(get_current_user)
+    current_user = Depends(get_current_user)
 ):
     """
     Uploads a document to secure storage, extracts its text using file-type specific parsers,
@@ -26,14 +24,13 @@ async def upload_document(
     """
     supabase = get_supabase_client()
     
-    # TODO: Re-enable project ownership validation before deployment
-    # For local testing, we skip verifying project ownership.
-    # project_check = supabase.table("projects").select("id").eq("id", project_id).eq("user_id", current_user.id).execute()
-    # if not project_check.data:
-    #     raise HTTPException(
-    #         status_code=status.HTTP_404_NOT_FOUND, 
-    #         detail="Project not found or user is not authorized"
-    #     )
+    # Verify project ownership
+    project_check = supabase.table("projects").select("id").eq("id", project_id).eq("user_id", current_user.id).execute()
+    if not project_check.data:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, 
+            detail="Project not found or user is not authorized"
+        )
         
     doc_id = str(uuid.uuid4())
     filename = file.filename
