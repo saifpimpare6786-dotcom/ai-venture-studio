@@ -19,6 +19,7 @@ if not os.environ.get("SUPABASE_SERVICE_ROLE_KEY"):
 from app.database.supabase import get_supabase_client
 from app.pipeline.planning_agent import planning_agent_node
 from app.pipeline.orchestrator_agent import orchestrator_agent_node
+from app.pipeline.research_agent import research_agent_node
 
 def run_standalone_agent_test():
     print("=== Standalone Planning & Orchestrator Node Verification ===")
@@ -74,7 +75,15 @@ def run_standalone_agent_test():
     orch_output = orchestrator_agent_node(mock_state)
     mock_state["research_results"] = orch_output.get("research_results", "")
     
-    print("\n[Orchestrator Agent Output (Research Results Preview)]:")
+    print("\n[Orchestrator Agent Output (Downstream Directives)]:")
+    print(mock_state["research_results"])
+    
+    # 4. Execute Research Agent Node directly
+    print("\n--- Running Research Agent Node ---")
+    research_output = research_agent_node(mock_state)
+    mock_state["research_results"] = research_output.get("research_results", "")
+    
+    print("\n[Research Agent Output (Research Results Summary)]:")
     print(mock_state["research_results"])
     
     print("\n=== Standalone Test Completed Successfully ===")
