@@ -16,15 +16,27 @@ if not os.environ.get("SUPABASE_URL"):
 if not os.environ.get("SUPABASE_SERVICE_ROLE_KEY"):
     os.environ["SUPABASE_SERVICE_ROLE_KEY"] = "mockservicekey"
 
+from app.database.supabase import get_supabase_client
 from app.pipeline.planning_agent import planning_agent_node
 from app.pipeline.orchestrator_agent import orchestrator_agent_node
 
 def run_standalone_agent_test():
     print("=== Standalone Planning & Orchestrator Node Verification ===")
     
+    # Dynamically resolve an existing project ID from the DB so logs insert successfully
+    project_id = "00000000-0000-0000-0000-000000000000"
+    try:
+        supabase = get_supabase_client()
+        res = supabase.table("projects").select("id").limit(1).execute()
+        if res.data:
+            project_id = res.data[0]["id"]
+            print(f"Dynamically resolved database project ID: {project_id}")
+    except Exception as db_err:
+        print(f"Database lookup warning (using default mock project): {str(db_err)}")
+        
     # 1. Initialize a fixed mock business idea state
     mock_state = {
-        "project_id": "00000000-0000-0000-0000-000000000000",  # Default system UUID
+        "project_id": project_id,
         "business_idea_input": (
             "EcoSphere is an automated SaaS platform for carbon compliance auditing. "
             "It target SMEs by connecting directly to utility providers to read usage details "

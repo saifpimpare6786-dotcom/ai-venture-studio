@@ -4,9 +4,9 @@ from app.core.config import settings
 
 def call_gemini(prompt: str, system_prompt: str = None) -> str:
     """
-    Calls the Gemini API (gemini-1.5-flash) with built-in 429 rate limit backoff.
+    Calls the Gemini API (gemini-3.5-flash) with built-in 429 rate limit backoff.
     """
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={settings.GEMINI_API_KEY}"
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent?key={settings.GEMINI_API_KEY}"
     
     contents_part = []
     if system_prompt:
@@ -22,7 +22,7 @@ def call_gemini(prompt: str, system_prompt: str = None) -> str:
     backoff = 1.0
     for attempt in range(max_retries):
         try:
-            response = httpx.post(url, json=payload, headers={"Content-Type": "application/json"}, timeout=30.0)
+            response = httpx.post(url, json=payload, headers={"Content-Type": "application/json"}, timeout=60.0)
             if response.status_code == 200:
                 res_data = response.json()
                 return res_data["candidates"][0]["content"]["parts"][0]["text"]
@@ -66,7 +66,7 @@ def call_nvidia_nim(prompt: str, system_prompt: str = None) -> str:
     backoff = 1.0
     for attempt in range(max_retries):
         try:
-            response = httpx.post(url, json=payload, headers=headers, timeout=30.0)
+            response = httpx.post(url, json=payload, headers=headers, timeout=60.0)
             if response.status_code == 200:
                 res_data = response.json()
                 return res_data["choices"][0]["message"]["content"]
