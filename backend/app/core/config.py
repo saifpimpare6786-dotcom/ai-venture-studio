@@ -16,6 +16,7 @@ class Settings(BaseSettings):
     )
     NVIDIA_NIM_API_KEY: str
     GEMINI_API_KEY: str
+    TAVILY_API_KEY: Optional[str] = None
     CHROMA_DB_PATH: str = "./chroma_db"
     PORT: int = 8000
     

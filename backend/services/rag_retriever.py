@@ -23,7 +23,7 @@ def get_chroma_client():
     os.makedirs(settings.CHROMA_DB_PATH, exist_ok=True)
     return chromadb.PersistentClient(path=settings.CHROMA_DB_PATH)
 
-def ingest_chunks(project_id: str, document_id: str, filename: str, category: str, chunks: List[str]) -> None:
+def ingest_chunks(project_id: str, document_id: str, filename: str, category: str, chunks: List[str], extra_metadata: Dict[str, Any] = None) -> None:
     """
     Generates embeddings and ingests document chunks into a project-isolated collection.
     Chroma collections enforce alphanumeric characters + underscores, hence uuid sanitization.
@@ -40,13 +40,18 @@ def ingest_chunks(project_id: str, document_id: str, filename: str, category: st
     embeddings = model.encode(chunks).tolist()
     
     ids = [f"{document_id}_{i}" for i in range(len(chunks))]
-    metadatas = [{
-        "project_id": project_id,
-        "document_id": document_id,
-        "filename": filename,
-        "category": category,
-        "chunk_index": i
-    } for i in range(len(chunks))]
+    metadatas = []
+    for i in range(len(chunks)):
+        meta = {
+            "project_id": project_id,
+            "document_id": document_id,
+            "filename": filename,
+            "category": category,
+            "chunk_index": i
+        }
+        if extra_metadata:
+            meta.update(extra_metadata)
+        metadatas.append(meta)
     
     collection.add(
         ids=ids,
