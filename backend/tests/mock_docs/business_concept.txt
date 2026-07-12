@@ -1,0 +1,5 @@
+EcoSphere Ventures is a modern sustainable tech startup focused on carbon accounting.
+Our primary mission is to simplify carbon tracking for small and medium enterprises (SMEs).
+We provide a cloud-based dashboard integrating utility data, transport logs, and supply chain records.
+By offering an automated carbon reporting pipeline, we save SMEs up to 80 hours of manual data entry.
+The market size is growing rapidly with new green regulations coming into play globally.
