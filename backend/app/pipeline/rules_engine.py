@@ -153,7 +153,15 @@ def business_rules_engine_node(state: AgentState) -> Dict[str, Any]:
     # 1. Structured data extraction via Gemini to conserve rate limit budgets
     extracted_dict = {}
     try:
-        raw_json_str = call_llm(prompt=user_prompt, system_prompt=EXTRACTION_SYSTEM_PROMPT, preferred_provider="gemini")
+        raw_json_str = call_llm(
+            prompt=user_prompt,
+            system_prompt=EXTRACTION_SYSTEM_PROMPT,
+            preferred_provider="gemini",
+            project_id=project_id,
+            agent_name="Business Rules Engine"
+        )
+        if isinstance(raw_json_str, dict) and raw_json_str.get("status") == "failed":
+            raise ValueError(raw_json_str["error"])
         cleaned_json_str = extract_json_block(raw_json_str)
         extracted_dict = json.loads(cleaned_json_str)
     except Exception as parse_err:

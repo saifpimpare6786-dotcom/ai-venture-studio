@@ -138,7 +138,21 @@ def research_agent_node(state: AgentState) -> Dict[str, Any]:
             
     # 1. Extract search queries using the LLM
     print("Extracting queries from plan...")
-    queries_raw = call_llm(prompt=plan, system_prompt=QUERY_EXTRACTOR_SYSTEM_PROMPT, preferred_provider="nvidia")
+    queries_raw = call_llm(
+        prompt=plan,
+        system_prompt=QUERY_EXTRACTOR_SYSTEM_PROMPT,
+        preferred_provider="nvidia",
+        project_id=project_id,
+        agent_name="Research Agent"
+    )
+    
+    # Check if LLM call failed completely
+    if isinstance(queries_raw, dict) and queries_raw.get("status") == "failed":
+        print(f"Research Agent node failed to extract queries: {queries_raw['error']}")
+        return {
+            "research_results": f"Execution failed: {queries_raw['error']}"
+        }
+        
     queries = [q.strip() for q in queries_raw.split("\n") if q.strip()]
     
     # Cap queries at 3 to conserve quota

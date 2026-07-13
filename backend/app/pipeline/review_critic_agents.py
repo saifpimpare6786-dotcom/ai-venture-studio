@@ -54,7 +54,20 @@ def reviewer_agent_node(state: AgentState) -> Dict[str, Any]:
     )
     
     # 2. Call Gemini API to spread load off NIM ceiling
-    review = call_llm(prompt=user_prompt, system_prompt=REVIEWER_SYSTEM_PROMPT, preferred_provider="gemini")
+    review = call_llm(
+        prompt=user_prompt,
+        system_prompt=REVIEWER_SYSTEM_PROMPT,
+        preferred_provider="gemini",
+        project_id=project_id,
+        agent_name="Reviewer Agent"
+    )
+    
+    # Check if LLM call failed completely
+    if isinstance(review, dict) and review.get("status") == "failed":
+        print(f"Reviewer Agent node failed: {review['error']}")
+        return {
+            "reviewer_notes": f"Execution failed: {review['error']}"
+        }
     
     # 3. Log transaction to Supabase agent_logs
     try:
@@ -108,7 +121,20 @@ def critic_agent_node(state: AgentState) -> Dict[str, Any]:
     )
     
     # 2. Call Gemini API to spread load off NIM ceiling
-    critique = call_llm(prompt=user_prompt, system_prompt=CRITIC_SYSTEM_PROMPT, preferred_provider="gemini")
+    critique = call_llm(
+        prompt=user_prompt,
+        system_prompt=CRITIC_SYSTEM_PROMPT,
+        preferred_provider="gemini",
+        project_id=project_id,
+        agent_name="Critic Agent"
+    )
+    
+    # Check if LLM call failed completely
+    if isinstance(critique, dict) and critique.get("status") == "failed":
+        print(f"Critic Agent node failed: {critique['error']}")
+        return {
+            "critic_notes": f"Execution failed: {critique['error']}"
+        }
     
     # 3. Log transaction to Supabase agent_logs
     try:

@@ -38,7 +38,20 @@ def planning_agent_node(state: AgentState) -> Dict[str, Any]:
     user_prompt = f"Business Idea Input:\n{idea_input}\n\nDocument Context:\n{context_str}"
     
     # 2. Call NVIDIA NIM with Gemini fallback
-    plan = call_llm(prompt=user_prompt, system_prompt=PLANNING_SYSTEM_PROMPT, preferred_provider="nvidia")
+    plan = call_llm(
+        prompt=user_prompt,
+        system_prompt=PLANNING_SYSTEM_PROMPT,
+        preferred_provider="nvidia",
+        project_id=project_id,
+        agent_name="Planning Agent"
+    )
+    
+    # Check if LLM call failed completely
+    if isinstance(plan, dict) and plan.get("status") == "failed":
+        print(f"Planning Agent node failed: {plan['error']}")
+        return {
+            "plan": f"Execution failed: {plan['error']}"
+        }
     
     # 3. Log transaction to Supabase agent_logs
     try:

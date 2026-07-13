@@ -84,7 +84,23 @@ def execute_agent_logic(
     )
     
     # 3. Call LLM (Meta Llama-3.1-70b-instruct via NVIDIA NIM)
-    output = call_llm(prompt=user_prompt, system_prompt=system_prompt, preferred_provider="nvidia")
+    output = call_llm(
+        prompt=user_prompt,
+        system_prompt=system_prompt,
+        preferred_provider="nvidia",
+        project_id=project_id,
+        agent_name=agent_name
+    )
+    
+    # Check if LLM call failed completely
+    if isinstance(output, dict) and output.get("status") == "failed":
+        print(f"{agent_name} node failed: {output['error']}")
+        agent_key = agent_name.lower().replace(" agent", "")
+        return {
+            "specialized_outputs": {
+                agent_key: f"Execution failed: {output['error']}"
+            }
+        }
     
     # 4. Log to Supabase agent_logs
     try:

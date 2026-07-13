@@ -28,7 +28,20 @@ def orchestrator_agent_node(state: AgentState) -> Dict[str, Any]:
     print(f"--- [Orchestrator Agent Node] Starting execution for Project {project_id} ---")
     
     # 1. Prompt LLM using the plan as user input
-    orchestration_result = call_llm(prompt=plan, system_prompt=ORCHESTRATOR_SYSTEM_PROMPT, preferred_provider="nvidia")
+    orchestration_result = call_llm(
+        prompt=plan,
+        system_prompt=ORCHESTRATOR_SYSTEM_PROMPT,
+        preferred_provider="nvidia",
+        project_id=project_id,
+        agent_name="Orchestrator Agent"
+    )
+    
+    # Check if LLM call failed completely
+    if isinstance(orchestration_result, dict) and orchestration_result.get("status") == "failed":
+        print(f"Orchestrator Agent node failed: {orchestration_result['error']}")
+        return {
+            "directives": f"Execution failed: {orchestration_result['error']}"
+        }
     
     # 2. Log transaction to Supabase agent_logs
     try:

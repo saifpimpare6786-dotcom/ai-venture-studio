@@ -33,10 +33,19 @@ Identify regulatory compliance gaps, operational loopholes, data security vulner
 Offer mitigation recommendations.
 """
 
-def execute_review(system_prompt: str, user_prompt: str) -> str:
+def execute_review(system_prompt: str, user_prompt: str, project_id: str = None, role: str = None) -> str:
     """Helper function to execute a council call using Llama-3.1-70b-instruct via NVIDIA NIM."""
     try:
-        return call_llm(prompt=user_prompt, system_prompt=system_prompt, preferred_provider="nvidia")
+        res = call_llm(
+            prompt=user_prompt,
+            system_prompt=system_prompt,
+            preferred_provider="nvidia",
+            project_id=project_id,
+            agent_name=role
+        )
+        if isinstance(res, dict) and res.get("status") == "failed":
+            return f"Council review failed: {res['error']}"
+        return res
     except Exception as e:
         return f"Council review failed: {str(e)}"
 
@@ -87,7 +96,13 @@ def llm_council_node(state: AgentState) -> Dict[str, Any]:
     print("Executing Council debate reviews concurrently via ThreadPoolExecutor...")
     with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
         future_to_role = {
-            executor.submit(execute_review, review["system"], review["prompt"]): review["role"]
+            executor.submit(
+                execute_review,
+                review["system"],
+                review["prompt"],
+                project_id,
+                review["role"]
+            ): review["role"]
             for review in reviews_setup
         }
         for future in concurrent.futures.as_completed(future_to_role):
