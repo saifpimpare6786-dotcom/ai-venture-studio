@@ -26,6 +26,11 @@ from app.pipeline.specialized_agents import (
     marketing_agent_node,
     risk_agent_node
 )
+from app.pipeline.council_agent import llm_council_node
+from app.pipeline.review_critic_agents import (
+    reviewer_agent_node,
+    critic_agent_node
+)
 
 def run_standalone_agent_test():
     print("=== Standalone Planning & Orchestrator Node Verification ===")
@@ -124,6 +129,32 @@ def run_standalone_agent_test():
     mock_state["specialized_outputs"].update(risk_output.get("specialized_outputs", {}))
     print("[Risk Agent Output Assessment Preview]:")
     print(mock_state["specialized_outputs"].get("risk", "")[:800] + "...\n")
+    
+    # 6. Execute LLM Council Node directly
+    print("\n--- Running LLM Council Node ---")
+    council_output = llm_council_node(mock_state)
+    mock_state["council_feedback"] = council_output.get("council_feedback", [])
+    
+    print(f"\n[LLM Council Output (Feedback Count: {len(mock_state['council_feedback'])})]:")
+    for idx, feedback in enumerate(mock_state["council_feedback"]):
+        print(f"\nFeedback [{idx + 1}]:")
+        print(feedback[:1000] + "...\n")
+        
+    # 7. Execute Reviewer Agent Node directly
+    print("\n--- Running Reviewer Agent Node ---")
+    rev_output = reviewer_agent_node(mock_state)
+    mock_state["reviewer_notes"] = rev_output.get("reviewer_notes", "")
+    
+    print("\n[Reviewer Agent Output (Reviewer Notes)]:")
+    print(mock_state["reviewer_notes"][:1500] + "...\n")
+    
+    # 8. Execute Critic Agent Node directly
+    print("\n--- Running Critic Agent Node ---")
+    critic_output = critic_agent_node(mock_state)
+    mock_state["critic_notes"] = critic_output.get("critic_notes", "")
+    
+    print("\n[Critic Agent Output (Critic Notes)]:")
+    print(mock_state["critic_notes"][:1500] + "...\n")
     
     print("\n=== Standalone Test Completed Successfully ===")
 
