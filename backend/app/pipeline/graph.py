@@ -14,6 +14,7 @@ from app.pipeline.review_critic_agents import (
     reviewer_agent_node,
     critic_agent_node
 )
+from app.pipeline.rules_engine import business_rules_engine_node
 from typing import Dict, Any
 
 # 1. Initialize StateGraph with the custom AgentState TypedDict schema
@@ -30,6 +31,7 @@ workflow.add_node("risk", risk_agent_node)
 workflow.add_node("council", llm_council_node)
 workflow.add_node("reviewer", reviewer_agent_node)
 workflow.add_node("critic", critic_agent_node)
+workflow.add_node("rules_engine", business_rules_engine_node)
 
 # 3. Configure execution routing
 workflow.set_entry_point("planning")
@@ -48,10 +50,11 @@ workflow.add_edge("finance", "council")
 workflow.add_edge("marketing", "council")
 workflow.add_edge("risk", "council")
 
-# Sequence from Council to Reviewer and Critic
+# Sequence from Council to Reviewer, Critic, and Business Rules Engine
 workflow.add_edge("council", "reviewer")
 workflow.add_edge("reviewer", "critic")
-workflow.add_edge("critic", END)
+workflow.add_edge("critic", "rules_engine")
+workflow.add_edge("rules_engine", END)
 
 # 4. Compile the orchestrator pipeline workflow
 app = workflow.compile()
@@ -59,7 +62,7 @@ app = workflow.compile()
 def execute_pipeline(initial_state: Dict[str, Any]) -> Dict[str, Any]:
     """
     Executes the compiled multi-agent LangGraph pipeline.
-    Invokes nodes starting from planning, through to parallel business agents, council debate, review, and critique.
+    Invokes nodes starting from planning, through to parallel business agents, council debate, review, critique, and rules validation.
     """
     # Invoke returns the final updated state dictionary
     return app.invoke(initial_state)
