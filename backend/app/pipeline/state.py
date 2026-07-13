@@ -1,4 +1,11 @@
-from typing import TypedDict, List, Dict, Any, NotRequired
+from typing import TypedDict, List, Dict, Any, NotRequired, Annotated
+
+def merge_dict(left: Dict[str, Any], right: Dict[str, Any]) -> Dict[str, Any]:
+    """Reducer that merges dict updates from parallel nodes instead of overwriting."""
+    new_dict = left.copy() if left else {}
+    if right:
+        new_dict.update(right)
+    return new_dict
 
 class AgentState(TypedDict):
     """
@@ -10,8 +17,9 @@ class AgentState(TypedDict):
     business_idea_input: str
     rag_context: List[str]
     plan: str
+    directives: NotRequired[str]
     research_results: str
-    specialized_outputs: Dict[str, str]
+    specialized_outputs: Annotated[Dict[str, str], merge_dict]
     council_feedback: List[str]
     reviewer_notes: str
     critic_notes: str

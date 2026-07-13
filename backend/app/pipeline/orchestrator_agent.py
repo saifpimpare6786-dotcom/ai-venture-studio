@@ -50,5 +50,5 @@ def orchestrator_agent_node(state: AgentState) -> Dict[str, Any]:
         
     print(f"--- [Orchestrator Agent Node] Finished execution ---")
     return {
-        "research_results": orchestration_result
+        "directives": orchestration_result
     }
