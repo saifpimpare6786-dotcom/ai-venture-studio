@@ -5,9 +5,9 @@ from app.core.config import settings
 
 def call_gemini(prompt: str, system_prompt: str = None) -> str:
     """
-    Calls the Gemini API (gemini-3.5-flash) with built-in 429 rate limit backoff.
+    Calls the Gemini API (gemini-1.5-flash) with built-in 429 rate limit backoff.
     """
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:key={settings.GEMINI_API_KEY}"
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={settings.GEMINI_API_KEY}"
     
     contents_part = []
     if system_prompt:
@@ -27,6 +27,9 @@ def call_gemini(prompt: str, system_prompt: str = None) -> str:
             if response.status_code == 200:
                 res_data = response.json()
                 return res_data["candidates"][0]["content"]["parts"][0]["text"]
+            elif response.status_code == 404:
+                print(f"Gemini API 404 (Model Not Found) error. Bypassing retries to failover immediately.")
+                raise ValueError(f"Gemini API returned 404: {response.text}")
             elif response.status_code == 429:
                 print(f"Gemini API 429 rate limit hit. Attempt {attempt + 1}. Retrying in {backoff + 2.0}s...")
                 time.sleep(backoff + 2.0) # Add delay to avoid back-to-back hits
@@ -34,6 +37,8 @@ def call_gemini(prompt: str, system_prompt: str = None) -> str:
             else:
                 raise ValueError(f"Gemini API error (Status {response.status_code}): {response.text}")
         except Exception as e:
+            if "404" in str(e):
+                raise e
             if attempt == max_retries - 1:
                 raise e
             print(f"Gemini call exception encountered. Retrying in {backoff + 2.0}s... Error: {str(e)}")
