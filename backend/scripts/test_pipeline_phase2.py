@@ -20,6 +20,12 @@ from app.database.supabase import get_supabase_client
 from app.pipeline.planning_agent import planning_agent_node
 from app.pipeline.orchestrator_agent import orchestrator_agent_node
 from app.pipeline.research_agent import research_agent_node
+from app.pipeline.specialized_agents import (
+    strategy_agent_node,
+    finance_agent_node,
+    marketing_agent_node,
+    risk_agent_node
+)
 
 def run_standalone_agent_test():
     print("=== Standalone Planning & Orchestrator Node Verification ===")
@@ -48,6 +54,7 @@ def run_standalone_agent_test():
             "Utility connection APIs offer reliable hourly data feeds for power and water usage analytics."
         ],
         "plan": "",
+        "directives": "",
         "research_results": "",
         "specialized_outputs": {},
         "council_feedback": [],
@@ -55,7 +62,8 @@ def run_standalone_agent_test():
         "critic_notes": "",
         "rules_validation_result": {},
         "scores": {},
-        "final_report": ""
+        "final_report": "",
+        "force_refresh": True
     }
     
     print("\n--- Initial State ---")
@@ -73,10 +81,10 @@ def run_standalone_agent_test():
     # 3. Execute Orchestrator Agent Node directly
     print("\n--- Running Orchestrator Agent Node ---")
     orch_output = orchestrator_agent_node(mock_state)
-    mock_state["research_results"] = orch_output.get("research_results", "")
+    mock_state["directives"] = orch_output.get("directives", "")
     
     print("\n[Orchestrator Agent Output (Downstream Directives)]:")
-    print(mock_state["research_results"])
+    print(mock_state["directives"])
     
     # 4. Execute Research Agent Node directly
     print("\n--- Running Research Agent Node ---")
@@ -85,6 +93,37 @@ def run_standalone_agent_test():
     
     print("\n[Research Agent Output (Research Results Summary)]:")
     print(mock_state["research_results"])
+    
+    # 5. Execute Specialized Business Agent Nodes directly
+    print("\n--- Running Specialized Business Agent Nodes ---")
+    
+    # Strategy Agent
+    print("\nExecuting Strategy Agent...")
+    strat_output = strategy_agent_node(mock_state)
+    mock_state["specialized_outputs"].update(strat_output.get("specialized_outputs", {}))
+    print("[Strategy Agent Output Assessment Preview]:")
+    print(mock_state["specialized_outputs"].get("strategy", "")[:800] + "...\n")
+    
+    # Finance Agent
+    print("\nExecuting Finance Agent...")
+    fin_output = finance_agent_node(mock_state)
+    mock_state["specialized_outputs"].update(fin_output.get("specialized_outputs", {}))
+    print("[Finance Agent Output Assessment Preview]:")
+    print(mock_state["specialized_outputs"].get("finance", "")[:800] + "...\n")
+    
+    # Marketing Agent
+    print("\nExecuting Marketing Agent...")
+    mkt_output = marketing_agent_node(mock_state)
+    mock_state["specialized_outputs"].update(mkt_output.get("specialized_outputs", {}))
+    print("[Marketing Agent Output Assessment Preview]:")
+    print(mock_state["specialized_outputs"].get("marketing", "")[:800] + "...\n")
+    
+    # Risk Agent
+    print("\nExecuting Risk Agent...")
+    risk_output = risk_agent_node(mock_state)
+    mock_state["specialized_outputs"].update(risk_output.get("specialized_outputs", {}))
+    print("[Risk Agent Output Assessment Preview]:")
+    print(mock_state["specialized_outputs"].get("risk", "")[:800] + "...\n")
     
     print("\n=== Standalone Test Completed Successfully ===")
 
