@@ -31,6 +31,7 @@ from app.pipeline.review_critic_agents import (
     reviewer_agent_node,
     critic_agent_node
 )
+from app.pipeline.rules_engine import business_rules_engine_node
 
 def run_standalone_agent_test():
     print("=== Standalone Planning & Orchestrator Node Verification ===")
@@ -155,6 +156,16 @@ def run_standalone_agent_test():
     
     print("\n[Critic Agent Output (Critic Notes)]:")
     print(mock_state["critic_notes"][:1500] + "...\n")
+    
+    # 9. Execute Business Rules Engine directly
+    print("\n--- Running Business Rules Engine Node ---")
+    rules_output = business_rules_engine_node(mock_state)
+    mock_state["rules_validation_result"] = rules_output.get("rules_validation_result", {})
+    
+    print("\n[Business Rules Engine Output (Rules Validation Result)]:")
+    print(f"Is Valid: {mock_state['rules_validation_result'].get('is_valid')}")
+    print(f"Errors Found: {mock_state['rules_validation_result'].get('errors')}")
+    print(f"Extracted Metrics: {mock_state['rules_validation_result'].get('extracted_data')}\n")
     
     print("\n=== Standalone Test Completed Successfully ===")
 
