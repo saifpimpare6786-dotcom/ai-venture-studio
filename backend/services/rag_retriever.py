@@ -1,11 +1,15 @@
 import os
+os.environ["TRANSFORMERS_OFFLINE"] = "1"
+os.environ["HF_HUB_OFFLINE"] = "1"
+
 import chromadb
 from sentence_transformers import SentenceTransformer
 from typing import List, Dict, Any
 from app.core.config import settings
 
-# Thread-safe global for lazy loading of the sentence transformer
+# Thread-safe globals for lazy loading
 _embedding_model = None
+_chroma_client = None
 
 def get_embedding_model():
     """Lazy loads and caches the local Sentence Transformer model to save resource startup cost."""
@@ -17,11 +21,14 @@ def get_embedding_model():
 
 def get_chroma_client():
     """
-    Creates and returns a ChromaDB PersistentClient.
+    Creates and returns a cached ChromaDB PersistentClient singleton.
     Ensures the storage directory exists.
     """
-    os.makedirs(settings.CHROMA_DB_PATH, exist_ok=True)
-    return chromadb.PersistentClient(path=settings.CHROMA_DB_PATH)
+    global _chroma_client
+    if _chroma_client is None:
+        os.makedirs(settings.CHROMA_DB_PATH, exist_ok=True)
+        _chroma_client = chromadb.PersistentClient(path=settings.CHROMA_DB_PATH)
+    return _chroma_client
 
 def ingest_chunks(project_id: str, document_id: str, filename: str, category: str, chunks: List[str], extra_metadata: Dict[str, Any] = None) -> None:
     """

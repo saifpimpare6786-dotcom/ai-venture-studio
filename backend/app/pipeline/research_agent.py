@@ -7,7 +7,7 @@ from app.database.supabase import get_supabase_client
 from app.core.config import settings
 from services.llm import call_llm
 from services.document_parser import chunk_text
-from services.rag_retriever import ingest_chunks
+from services.rag_retriever import ingest_chunks, get_chroma_client
 from app.pipeline.state import AgentState
 
 QUERY_EXTRACTOR_SYSTEM_PROMPT = """
@@ -71,6 +71,71 @@ def research_agent_node(state: AgentState) -> Dict[str, Any]:
         print("No plan available in state. Skipping research.")
         return {"research_results": "No research conducted. Plan was empty."}
         
+    force_refresh = state.get("force_refresh", False)
+    
+    # Cache Check: Check if chunks already exist in ChromaDB for this project
+    client = get_chroma_client()
+    collection_name = f"project_{project_id.replace('-', '_')}"
+    
+    has_cache = False
+    collection = None
+    existing_chunks = []
+    try:
+        collection = client.get_collection(name=collection_name)
+        existing = collection.get(where={"source_type": "web_research"})
+        if existing and existing.get("documents"):
+            existing_chunks = existing.get("documents", [])
+            has_cache = True
+            print(f"Cache check: Found {len(existing_chunks)} existing web research chunks in ChromaDB.")
+    except Exception:
+        # Collection might not exist yet
+        pass
+        
+    if has_cache and not force_refresh:
+        print("Cache Hit! Reusing existing web research chunks from ChromaDB cache. Skipping Tavily searches.")
+        # Reconstruct summary from cached chunks
+        deduped = []
+        seen = set()
+        for doc in existing_chunks:
+            if doc not in seen:
+                seen.add(doc)
+                deduped.append(doc)
+        research_summary = "\n\n---\n\n".join(deduped[:10])  # limit summary size if there are many chunks
+        
+        # Log cached execution to agent_logs
+        try:
+            supabase = get_supabase_client()
+            supabase.table("agent_logs").insert({
+                "project_id": project_id,
+                "agent_name": "Research Agent",
+                "status": "completed (cached)",
+                "input_data": {
+                    "force_refresh": force_refresh,
+                    "cache_hit": True,
+                    "cached_chunks_count": len(existing_chunks)
+                },
+                "output_data": {
+                    "research_summary": research_summary[:1000]
+                }
+            }).execute()
+            print("Logged cached Research Agent execution to Supabase.")
+        except Exception as db_err:
+            print(f"Supabase Agent Log Sync Warning (continuing): {str(db_err)}")
+            
+        print(f"--- [Research Agent Node] Finished execution (Cached) ---")
+        return {
+            "research_results": research_summary
+        }
+        
+    # If force_refresh is True and we have existing cache, delete old chunks to prevent duplication
+    if force_refresh and has_cache and collection:
+        try:
+            print("Force refresh is active. Deleting existing web research chunks in ChromaDB...")
+            collection.delete(where={"source_type": "web_research"})
+            print("Existing chunks deleted.")
+        except Exception as delete_err:
+            print(f"Warning deleting old chunks: {str(delete_err)}")
+            
     # 1. Extract search queries using the LLM
     print("Extracting queries from plan...")
     queries_raw = call_llm(prompt=plan, system_prompt=QUERY_EXTRACTOR_SYSTEM_PROMPT, preferred_provider="nvidia")

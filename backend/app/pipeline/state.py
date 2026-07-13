@@ -1,4 +1,4 @@
-from typing import TypedDict, List, Dict, Any
+from typing import TypedDict, List, Dict, Any, NotRequired
 
 class AgentState(TypedDict):
     """
@@ -18,3 +18,4 @@ class AgentState(TypedDict):
     rules_validation_result: Dict[str, Any]
     scores: Dict[str, Any]
     final_report: str
+    force_refresh: NotRequired[bool]
