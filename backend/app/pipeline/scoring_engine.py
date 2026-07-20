@@ -128,7 +128,7 @@ def analytics_scoring_node(state: AgentState) -> Dict[str, Any]:
         raw_json_str = call_llm(
             prompt=user_prompt,
             system_prompt=SCORING_SYSTEM_PROMPT,
-            preferred_provider="gemini",
+            preferred_provider="nvidia",
             project_id=project_id,
             agent_name="Analytics & Scoring Engine"
         )

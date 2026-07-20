@@ -156,7 +156,7 @@ def business_rules_engine_node(state: AgentState) -> Dict[str, Any]:
         raw_json_str = call_llm(
             prompt=user_prompt,
             system_prompt=EXTRACTION_SYSTEM_PROMPT,
-            preferred_provider="gemini",
+            preferred_provider="nvidia",
             project_id=project_id,
             agent_name="Business Rules Engine"
         )

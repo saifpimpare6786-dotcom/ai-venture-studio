@@ -7,6 +7,9 @@ def call_gemini(prompt: str, system_prompt: str = None) -> str:
     """
     Calls the Gemini API (gemini-3.5-flash) with built-in 429 rate limit backoff.
     """
+    # Pace requests to avoid API quota saturation (especially when called concurrently or sequentially)
+    time.sleep(1.5)
+    
     url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent?key={settings.GEMINI_API_KEY}"
     
     contents_part = []
