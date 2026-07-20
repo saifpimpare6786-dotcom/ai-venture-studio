@@ -7,6 +7,14 @@ backend_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 if backend_dir not in sys.path:
     sys.path.append(backend_dir)
 
+# Load env variables from root or backend .env file
+from dotenv import load_dotenv
+backend_env = os.path.join(backend_dir, ".env")
+if os.path.exists(backend_env):
+    load_dotenv(backend_env)
+else:
+    load_dotenv(os.path.join(backend_dir, "..", ".env"))
+
 from app.database.supabase import get_supabase_client
 from app.pipeline.graph import execute_pipeline
 
@@ -100,7 +108,20 @@ def run_test():
         print("\n[Orchestrator Agent Node Output - Research Results preview]:")
         print(final_state.get("research_results"))
         
-        print("\nSUCCESS: LangGraph workflow ran end-to-end through Planning and Orchestrator nodes!")
+        print("\n[Business Rules Engine Output (Rules Validation Result)]:")
+        print(final_state.get("rules_validation_result"))
+        
+        print("\n[Analytics & Scoring Engine Output - Scores]:")
+        print(final_state.get("scores"))
+        
+        # Verify scores structure
+        scores = final_state.get("scores", {})
+        assert "overall_score" in scores, "overall_score must be computed"
+        assert "viability" in scores, "viability score must be present"
+        assert "market_fit" in scores, "market_fit score must be present"
+        assert "financial_soundness" in scores, "financial_soundness score must be present"
+        
+        print("\nSUCCESS: LangGraph workflow ran end-to-end through all nodes, including Analytics & Scoring Engine!")
         
     except Exception as run_err:
         print(f"\nERROR running pipeline: {str(run_err)}")

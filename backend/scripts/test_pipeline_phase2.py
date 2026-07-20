@@ -1,14 +1,19 @@
 import os
 import sys
+import json
 
 # Add backend directory to Python sys.path so we can import services and app modules
 backend_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 if backend_dir not in sys.path:
     sys.path.append(backend_dir)
 
-# Load env variables from root .env file
+# Load env variables from root or backend .env file
 from dotenv import load_dotenv
-load_dotenv(os.path.join(backend_dir, "..", ".env"))
+backend_env = os.path.join(backend_dir, ".env")
+if os.path.exists(backend_env):
+    load_dotenv(backend_env)
+else:
+    load_dotenv(os.path.join(backend_dir, "..", ".env"))
 
 # Prevent Supabase errors from failing the script by supplying mock credentials if missing
 if not os.environ.get("SUPABASE_URL"):
@@ -32,6 +37,7 @@ from app.pipeline.review_critic_agents import (
     critic_agent_node
 )
 from app.pipeline.rules_engine import business_rules_engine_node
+from app.pipeline.scoring_engine import analytics_scoring_node
 
 def run_standalone_agent_test():
     print("=== Standalone Planning & Orchestrator Node Verification ===")
@@ -166,6 +172,14 @@ def run_standalone_agent_test():
     print(f"Is Valid: {mock_state['rules_validation_result'].get('is_valid')}")
     print(f"Errors Found: {mock_state['rules_validation_result'].get('errors')}")
     print(f"Extracted Metrics: {mock_state['rules_validation_result'].get('extracted_data')}\n")
+    
+    # 10. Execute Analytics & Scoring Engine directly
+    print("\n--- Running Analytics & Scoring Engine Node ---")
+    scoring_output = analytics_scoring_node(mock_state)
+    mock_state["scores"] = scoring_output.get("scores", {})
+    
+    print("\n[Analytics & Scoring Engine Output (Scores)]:")
+    print(json.dumps(mock_state["scores"], indent=2))
     
     print("\n=== Standalone Test Completed Successfully ===")
 
