@@ -18,6 +18,16 @@ else:
 from app.database.supabase import get_supabase_client
 from app.pipeline.graph import execute_pipeline
 
+def safe_print(text):
+    if text is None:
+        print(None)
+    elif isinstance(text, str):
+        # Handle encoding for Windows CP1252 terminal safely
+        encoding = sys.stdout.encoding or "utf-8"
+        print(text.encode(encoding, errors="replace").decode(encoding))
+    else:
+        print(text)
+
 def run_test():
     print("=== AI Venture Studio LangGraph Agent Pipeline Test ===")
     
@@ -103,16 +113,16 @@ def run_test():
         print(f"Project ID: {final_state.get('project_id')}")
         
         print("\n[Planning Agent Node Output - Plan]:")
-        print(final_state.get("plan"))
+        safe_print(final_state.get("plan"))
         
         print("\n[Orchestrator Agent Node Output - Research Results preview]:")
-        print(final_state.get("research_results"))
+        safe_print(final_state.get("research_results"))
         
         print("\n[Business Rules Engine Output (Rules Validation Result)]:")
-        print(final_state.get("rules_validation_result"))
+        safe_print(final_state.get("rules_validation_result"))
         
         print("\n[Analytics & Scoring Engine Output - Scores]:")
-        print(final_state.get("scores"))
+        safe_print(final_state.get("scores"))
         
         # Verify scores structure
         scores = final_state.get("scores", {})
@@ -121,7 +131,18 @@ def run_test():
         assert "market_fit" in scores, "market_fit score must be present"
         assert "financial_soundness" in scores, "financial_soundness score must be present"
         
-        print("\nSUCCESS: LangGraph workflow ran end-to-end through all nodes, including Analytics & Scoring Engine!")
+        # Verify reports structure and database sync
+        final_report = final_state.get("final_report", "")
+        assert final_report, "final_report must be generated"
+        print(f"\n[Report Generator Output - Final Report preview]:\n{final_report[:600]}...")
+        
+        reports_res = supabase.table("reports").select("id, report_type").eq("project_id", project_id).execute()
+        print(f"\nGenerated database reports count: {len(reports_res.data)}")
+        for r in reports_res.data:
+            print(f"- {r['report_type']} (ID: {r['id']})")
+        assert len(reports_res.data) >= 5, "At least 5 reports should be generated in DB"
+        
+        print("\nSUCCESS: LangGraph workflow ran end-to-end through all nodes, including Analytics & Report Generator!")
         
     except Exception as run_err:
         print(f"\nERROR running pipeline: {str(run_err)}")

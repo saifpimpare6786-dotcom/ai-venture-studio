@@ -23,6 +23,16 @@ if not os.environ.get("SUPABASE_SERVICE_ROLE_KEY"):
 
 from app.database.supabase import get_supabase_client
 from app.pipeline.planning_agent import planning_agent_node
+
+def safe_print(text):
+    if text is None:
+        print(None)
+    elif isinstance(text, str):
+        # Handle encoding for Windows CP1252 terminal safely
+        encoding = sys.stdout.encoding or "utf-8"
+        print(text.encode(encoding, errors="replace").decode(encoding))
+    else:
+        print(text)
 from app.pipeline.orchestrator_agent import orchestrator_agent_node
 from app.pipeline.research_agent import research_agent_node
 from app.pipeline.specialized_agents import (
@@ -145,7 +155,7 @@ def run_standalone_agent_test():
     print(f"\n[LLM Council Output (Feedback Count: {len(mock_state['council_feedback'])})]:")
     for idx, feedback in enumerate(mock_state["council_feedback"]):
         print(f"\nFeedback [{idx + 1}]:")
-        print(feedback[:1000] + "...\n")
+        safe_print(feedback[:1000] + "...\n")
         
     # 7. Execute Reviewer Agent Node directly
     print("\n--- Running Reviewer Agent Node ---")
@@ -153,7 +163,7 @@ def run_standalone_agent_test():
     mock_state["reviewer_notes"] = rev_output.get("reviewer_notes", "")
     
     print("\n[Reviewer Agent Output (Reviewer Notes)]:")
-    print(mock_state["reviewer_notes"][:1500] + "...\n")
+    safe_print(mock_state["reviewer_notes"][:1500] + "...\n")
     
     # 8. Execute Critic Agent Node directly
     print("\n--- Running Critic Agent Node ---")
@@ -161,7 +171,7 @@ def run_standalone_agent_test():
     mock_state["critic_notes"] = critic_output.get("critic_notes", "")
     
     print("\n[Critic Agent Output (Critic Notes)]:")
-    print(mock_state["critic_notes"][:1500] + "...\n")
+    safe_print(mock_state["critic_notes"][:1500] + "...\n")
     
     # 9. Execute Business Rules Engine directly
     print("\n--- Running Business Rules Engine Node ---")

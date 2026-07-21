@@ -1,7 +1,7 @@
 import os
 import json
 from pydantic import BaseModel, Field, model_validator, ValidationError
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 from app.database.supabase import get_supabase_client
 from services.llm import call_llm
 from app.pipeline.state import AgentState
@@ -30,7 +30,7 @@ Return ONLY the valid JSON block wrapped in a markdown code fence. Do not includ
 
 class BusinessAssessmentPricing(BaseModel):
     tier_name: str
-    price_val: float
+    price_val: Optional[float] = None
 
 class DomainAssessmentsData(BaseModel):
     target_country: str = Field(default="Global")

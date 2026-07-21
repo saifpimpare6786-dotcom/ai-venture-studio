@@ -1,4 +1,6 @@
 import React, { useState } from 'react';
+import { supabase } from '../lib/supabaseClient';
+import { useAuth } from '../hooks/useAuth';
 import { 
   Briefcase, 
   Building2, 
@@ -44,6 +46,7 @@ const REVENUE_MODELS = [
 ];
 
 export default function BusinessIdeaWizard({ onSubmitSuccess }) {
+  const { user } = useAuth();
   const [currentStep, setCurrentStep] = useState(1);
   const [formData, setFormData] = useState({
     businessName: '',
@@ -123,20 +126,75 @@ export default function BusinessIdeaWizard({ onSubmitSuccess }) {
     setCurrentStep(prev => Math.max(prev - 1, 1));
   };
 
-  const handleSubmit = (e) => {
+  const handleSubmit = async (e) => {
     e.preventDefault();
     if (!validateStep(currentStep)) return;
 
     setIsSubmitting(true);
+    setErrors({});
     
-    // Simulate API call to FastAPI backend
-    setTimeout(() => {
+    try {
+      if (!user) {
+        throw new Error("You must be authenticated to create a project.");
+      }
+      
+      const projectRecord = {
+        name: formData.businessName,
+        industry: formData.industry,
+        idea_input: `${formData.problemStatement}\n\n${formData.solution}`,
+        description: formData.optionalNotes || '',
+        target_customers: formData.targetAudience,
+        budget: parseFloat(formData.budget) || 0.0,
+        revenue_model: formData.revenueModel,
+        timeline: formData.growthExpectations || '',
+        preferred_funding: formData.fundingRequirement || '',
+        team_size: 1,
+        goals: [formData.businessGoals],
+        user_id: user.id
+      };
+      
+      // 1. Insert Project into Supabase
+      const { data, error } = await supabase
+        .from('projects')
+        .insert([projectRecord])
+        .select();
+        
+      if (error) throw error;
+      if (!data || data.length === 0) {
+        throw new Error("No data returned from project database insertion.");
+      }
+      
+      const projectId = data[0].id;
+      
+      // 2. Fetch authentication headers and POST to FastAPI backend to trigger graph pipeline
+      const session = (await supabase.auth.getSession()).data.session;
+      const token = session?.access_token;
+      const backendUrl = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000';
+      
+      const response = await fetch(`${backendUrl}/api/reports/project/${projectId}/generate`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`
+        }
+      });
+      
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`FastAPI trigger failed: ${errorText}`);
+      }
+      
       setIsSubmitting(false);
       setSubmitComplete(true);
+      
+      // Pass the newly created project ID up to the application
       if (onSubmitSuccess) {
-        onSubmitSuccess(formData);
+        onSubmitSuccess(projectId);
       }
-    }, 2000);
+    } catch (submitErr) {
+      console.error("Submission failed: ", submitErr);
+      setErrors({ submit: submitErr.message || "An unexpected error occurred during venture configuration." });
+      setIsSubmitting(false);
+    }
   };
 
   const progressPercentage = (currentStep / steps.length) * 100;
@@ -588,6 +646,13 @@ export default function BusinessIdeaWizard({ onSubmitSuccess }) {
                         </p>
                       )}
                     </div>
+                  </div>
+                )}
+
+                {errors.submit && (
+                  <div className="p-3.5 rounded-lg border border-red-500/30 bg-red-500/5 text-red-400 text-xs flex items-center gap-2 mb-4">
+                    <AlertCircle className="w-4 h-4 flex-shrink-0" />
+                    <span>{errors.submit}</span>
                   </div>
                 )}
 

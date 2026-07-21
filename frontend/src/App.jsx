@@ -1,12 +1,14 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { useAuth } from './hooks/useAuth';
 import Auth from './components/Auth';
 import BusinessIdeaWizard from './components/BusinessIdeaWizard';
+import Dashboard from './components/Dashboard';
 import { LogOut, User, Layers } from 'lucide-react';
 import './App.css';
 
 function App() {
   const { user, loading, signOut } = useAuth();
+  const [currentProjectId, setCurrentProjectId] = useState(null);
 
   // Loading Splash Screen
   if (loading) {
@@ -69,7 +71,16 @@ function App() {
 
       {/* Main Container */}
       <main className="flex-1 flex flex-col justify-center relative">
-        <BusinessIdeaWizard />
+        {currentProjectId ? (
+          <Dashboard 
+            projectId={currentProjectId} 
+            onBackToWizard={() => setCurrentProjectId(null)} 
+          />
+        ) : (
+          <BusinessIdeaWizard 
+            onSubmitSuccess={(projectId) => setCurrentProjectId(projectId)} 
+          />
+        )}
       </main>
     </div>
   );
