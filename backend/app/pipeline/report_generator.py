@@ -36,6 +36,7 @@ def report_generator_node(state: AgentState) -> Dict[str, Any]:
     council = state.get("council_feedback", [])
     reviewer = state.get("reviewer_notes", "")
     critic = state.get("critic_notes", "")
+    rules_validation = state.get("rules_validation_result", {})
     scores = state.get("scores", {})
     
     print(f"--- [Report Generator Node] Starting execution for Project {project_id} ---")
@@ -57,6 +58,7 @@ def report_generator_node(state: AgentState) -> Dict[str, Any]:
         f"COUNCIL DEBATE NOTES:\n{council_str}\n\n"
         f"REVIEWER EXECUTIVE BRIEFING:\n{reviewer}\n\n"
         f"CRITIC ADVERSARIAL NOTES:\n{critic}\n\n"
+        f"BUSINESS RULES VALIDATION RESULT:\n{json.dumps(rules_validation, indent=2)}\n\n"
         f"SCORES SUMMARY:\n{json.dumps(scores, indent=2)}"
     )
 
@@ -64,6 +66,15 @@ def report_generator_node(state: AgentState) -> Dict[str, Any]:
     report_configs = {
         "Executive Summary": {
             "schema": ExecutiveSummarySchema,
+            "export_formats": ["docx", "pptx", "pdf"],
+            "export_mapping": {
+                "concept": "Venture Concept & Value Proposition",
+                "market_opportunity": "Market Opportunity & Target Segment",
+                "strategic_positioning": "Strategic Positioning & Channels",
+                "financial_projection_summary": "Financial Projections & Pricing Models",
+                "risk_mitigation_summary": "Risk Mitigation & Compliance",
+                "overall_score": "Viability Performance Score"
+            },
             "system_prompt": f"""
 You are the Report Generator for AI Venture Studio. Your task is to compile a structured, premium Executive Summary JSON object matching the requested schema.
 Ground your synthesis in the provided boardroom assessments, critiques, and scores.
@@ -83,6 +94,14 @@ Return ONLY the valid JSON block wrapped in a markdown code fence. Do not includ
         },
         "Business Plan": {
             "schema": BusinessPlanSchema,
+            "export_formats": ["docx", "pdf"],
+            "export_mapping": {
+                "company_description": "Company Description & Mission",
+                "market_analysis": "Market Analysis & Landscape",
+                "marketing_sales_strategy": "Marketing & Sales Strategy",
+                "operational_plan": "Operational & Compliance Roadmap",
+                "financial_plan": "Financial Plan & Pricing Structures"
+            },
             "system_prompt": """
 You are the Report Generator for AI Venture Studio. Your task is to compile a structured, comprehensive Business Plan JSON object matching the requested schema.
 Target JSON Format:
@@ -98,6 +117,13 @@ Return ONLY the valid JSON block wrapped in a markdown code fence.
         },
         "SWOT Analysis": {
             "schema": SwotAnalysisSchema,
+            "export_formats": ["docx", "pptx", "pdf"],
+            "export_mapping": {
+                "strengths": "Venture Strengths",
+                "weaknesses": "Venture Weaknesses",
+                "opportunities": "Market Opportunities",
+                "threats": "External Threats"
+            },
             "system_prompt": """
 You are the Report Generator for AI Venture Studio. Your task is to generate a structured SWOT Analysis JSON object containing string arrays for each quadrant.
 Target JSON Format:
@@ -112,6 +138,13 @@ Return ONLY the valid JSON block wrapped in a markdown code fence.
         },
         "Financial Projection": {
             "schema": FinancialProjectionSchema,
+            "export_formats": ["docx", "pdf"],
+            "export_mapping": {
+                "revenue_model_details": "Monetization & Pricing Tiers",
+                "pricing_sanity_check": "Sanity Check & Margins",
+                "capital_requirements": "Capital Requirements & Budgets",
+                "break_even_analysis": "Break-Even Analysis & Plausible Timeline"
+            },
             "system_prompt": """
 You are the Report Generator for AI Venture Studio. Your task is to generate a Financial Projection report JSON object.
 Target JSON Format:
@@ -126,6 +159,13 @@ Return ONLY the valid JSON block wrapped in a markdown code fence.
         },
         "Investment Readiness Report": {
             "schema": InvestmentReadinessSchema,
+            "export_formats": ["docx", "pptx", "pdf"],
+            "export_mapping": {
+                "investment_thesis": "Investment Thesis",
+                "scoring_breakdown": "Scoring Engine Rubric & Breakdown",
+                "critic_concerns": "VC Critiques & Strategic Risks",
+                "milestones_funding": "Milestones & Capital Allocation"
+            },
             "system_prompt": """
 You are the Report Generator for AI Venture Studio. Your task is to generate an Investment Readiness Report JSON object.
 Target JSON Format:
@@ -148,6 +188,10 @@ Return ONLY the valid JSON block wrapped in a markdown code fence.
         print(f"Generating report: '{report_type}'...")
         
         try:
+            # Enforce that reports are generated ONLY from data that has passed Business Rules Engine validation
+            if not rules_validation or not rules_validation.get("is_valid", False):
+                validation_errors = ", ".join(rules_validation.get("errors", ["Validation has not run or was not successful"]))
+                raise ValueError(f"Business Rules validation failed: {validation_errors}")
             raw_text = call_llm(
                 prompt=context_data,
                 system_prompt=config["system_prompt"],
@@ -161,6 +205,19 @@ Return ONLY the valid JSON block wrapped in a markdown code fence.
                 
             cleaned_json = extract_json_block(raw_text)
             report_content = json.loads(cleaned_json)
+            
+            # Pre-validate/clean schema fields: convert nested dicts/lists to strings if schema expects str
+            schema_fields = config["schema"].model_fields
+            for field_name, field_info in schema_fields.items():
+                if field_name in report_content:
+                    val = report_content[field_name]
+                    if field_info.annotation == str and not isinstance(val, str):
+                        if isinstance(val, dict):
+                            report_content[field_name] = "\n".join(f"- {k.replace('_', ' ').title()}: {v}" for k, v in val.items())
+                        elif isinstance(val, list):
+                            report_content[field_name] = "\n".join(f"- {v}" for v in val)
+                        else:
+                            report_content[field_name] = str(val)
             
             # Validate output using Pydantic schema
             config["schema"].model_validate(report_content)
@@ -189,10 +246,32 @@ Return ONLY the valid JSON block wrapped in a markdown code fence.
             
         except Exception as err:
             print(f"Failed to generate report type '{report_type}': {str(err)}")
-            # Populate with fallback info so pipeline doesn't break
-            generated_reports[report_type] = {
+            fallback_content = {
                 "error": f"Report generation failed: {str(err)}"
             }
+            generated_reports[report_type] = fallback_content
+            
+            try:
+                # Save failure fallback report to Supabase
+                existing = supabase.table("reports").select("id").eq("project_id", project_id).eq("report_type", report_type).execute()
+                
+                report_record = {
+                    "project_id": project_id,
+                    "report_type": report_type,
+                    "content": fallback_content,
+                    "scores": scores,
+                    "status": "Failed"
+                }
+                
+                if existing.data:
+                    report_id = existing.data[0]["id"]
+                    supabase.table("reports").update(report_record).eq("id", report_id).execute()
+                    print(f"Updated database failure fallback record for '{report_type}'.")
+                else:
+                    supabase.table("reports").insert(report_record).execute()
+                    print(f"Created new database failure fallback record for '{report_type}'.")
+            except Exception as db_err:
+                print(f"Failed to insert database failure fallback record for '{report_type}': {str(db_err)}")
 
     # 3. Create a readable text summary of all reports for final_report state
     summary_lines = [f"# Reports Suite for Project: {project_id}\n"]
