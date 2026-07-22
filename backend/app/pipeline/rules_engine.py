@@ -104,13 +104,13 @@ class DomainAssessmentsData(BaseModel):
             all_tiers.setdefault(normalise_tier(item.tier_name), {})["marketing"] = item
 
         for normalized_tier, source_items in all_tiers.items():
-            # ── Rule B1: None price alongside a real numeric price from another source ──
-            missing_sources = [
-                src for src, item in source_items.items() if item.is_missing
-            ]
-            numeric_sources = [
-                src for src, item in source_items.items() if item.is_numeric
-            ]
+            # Classify each source's contribution to this tier
+            numeric_sources  = [src for src, item in source_items.items() if item.is_numeric]
+            custom_sources   = [src for src, item in source_items.items() if item.is_custom]
+            missing_sources  = [src for src, item in source_items.items() if item.is_missing]
+
+            # ── Rule B1: null price alongside any concrete numeric ───────────
+            # A None alongside a real number means extraction failure or agent gap.
             if missing_sources and numeric_sources:
                 errors.append(
                     f"Tier '{normalized_tier}': null price_val in "
@@ -119,25 +119,48 @@ class DomainAssessmentsData(BaseModel):
                     f"possible upstream agent failure or extraction gap."
                 )
 
-            # ── Rule B2: Numeric-only mismatch (>2x spread) ─────────────────
-            # Custom-pricing tiers (-1.0) are intentionally excluded from the
-            # numeric comparison — they are not a data error.
-            numeric_prices = {
-                src: item.price_val
-                for src, item in source_items.items()
-                if item.is_numeric
-            }
-            if len(numeric_prices) >= 2:
-                min_price = min(numeric_prices.values())
-                max_price = max(numeric_prices.values())
-                if max_price > 2.0 * min_price:
-                    breakdown = ", ".join(
-                        [f"{k}: {v}" for k, v in numeric_prices.items()]
-                    )
-                    errors.append(
-                        f"Pricing mismatch for tier '{normalized_tier}': prices differ "
-                        f"by more than 2x ({breakdown})"
-                    )
+            # ── Rule B3: mixed numeric + custom-sentinel = inconsistency ─────
+            # If at least one source gave a concrete number AND at least one gave
+            # the non-numeric sentinel (-1.0), the sources disagree on whether
+            # this tier is priced or unpriced — that is a real validation error.
+            # The sentinel-vs-sentinel case (all sources agree tier is custom) is
+            # the ONLY case where we skip the numeric mismatch check.
+            if numeric_sources and custom_sources:
+                breakdown = ", ".join(
+                    [
+                        f"{src}: {source_items[src].price_val}"
+                        for src in sorted(source_items)
+                    ]
+                )
+                errors.append(
+                    f"Tier '{normalized_tier}' data inconsistency: "
+                    f"{', '.join(numeric_sources)} gave concrete pricing while "
+                    f"{', '.join(custom_sources)} declared it non-numeric/custom — "
+                    f"agents must agree on whether this tier is priced or unpriced "
+                    f"({breakdown})."
+                )
+
+            # ── Rule B2: numeric-only spread check (>2x) ────────────────────
+            # Only runs when B3 didn't fire (i.e. all active sources are numeric).
+            # Custom-sentinel sources are excluded here because B3 already caught
+            # any numeric+custom inconsistency above.
+            if not custom_sources:
+                numeric_prices = {
+                    src: item.price_val
+                    for src, item in source_items.items()
+                    if item.is_numeric
+                }
+                if len(numeric_prices) >= 2:
+                    min_price = min(numeric_prices.values())
+                    max_price = max(numeric_prices.values())
+                    if max_price > 2.0 * min_price:
+                        breakdown = ", ".join(
+                            [f"{k}: {v}" for k, v in numeric_prices.items()]
+                        )
+                        errors.append(
+                            f"Pricing mismatch for tier '{normalized_tier}': prices differ "
+                            f"by more than 2x ({breakdown})"
+                        )
 
         if errors:
             raise ValueError("; ".join(errors))
