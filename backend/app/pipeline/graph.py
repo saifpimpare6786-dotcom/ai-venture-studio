@@ -112,16 +112,21 @@ workflow.set_entry_point("planning")
 workflow.add_edge("planning", "orchestrator")
 workflow.add_edge("orchestrator", "research")
 
-# Fan-out to specialized agents in parallel
+# Fan-out to specialized agents:
+#   Strategy, Finance, and Risk run in parallel from Research.
+#   Marketing runs SEQUENTIALLY after Finance so it can read Finance's
+#   finalized pricing tiers from state before constructing its prompt.
+#   This prevents Marketing from hallucinating different price figures.
 workflow.add_edge("research", "strategy")
 workflow.add_edge("research", "finance")
-workflow.add_edge("research", "marketing")
 workflow.add_edge("research", "risk")
+workflow.add_edge("finance", "marketing")  # Marketing depends on Finance output
 
-# Fan-in through Gate 1 before Council
+# Fan-in through Gate 1 before Council.
+# Note: Finance fans into Marketing (sequential), so Marketing is the terminal
+# node of that branch and routes into the gate, not Finance directly.
 workflow.add_edge("strategy", "pipeline_gate")
-workflow.add_edge("finance", "pipeline_gate")
-workflow.add_edge("marketing", "pipeline_gate")
+workflow.add_edge("marketing", "pipeline_gate")  # terminal of Finance→Marketing chain
 workflow.add_edge("risk", "pipeline_gate")
 
 # Gate 1 conditional: healthy → Council, aborted → END

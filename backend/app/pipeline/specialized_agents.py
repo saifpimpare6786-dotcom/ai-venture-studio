@@ -40,7 +40,14 @@ Analyze the provided business idea input, orchestrator directives, and RAG docum
 Deliver an expert assessment covering:
 1. Customer Outreach Channels: The most effective digital and offline acquisition methods.
 2. Ideal Client Profile (ICP): Persona specifications based on size, industry, or demographics.
-3. Branding & Value Proposition Vectors: Emphasize core values and positioning taglines. If pricing models are mentioned, you MUST specify concrete tier names and exact numeric values (e.g., Basic: $50/month, Premium: $200/month) matching the Finance assumptions. Do not describe pricing generically.
+3. Branding & Value Proposition Vectors: Emphasize core values and positioning taglines.
+   PRICING RULE — CRITICAL: The Finance Agent has already defined the authoritative pricing tiers
+   for this venture. These tiers are provided to you verbatim in the section labelled
+   "Finance Agent Pricing Tiers (Authoritative — Do Not Change)" in your user prompt.
+   You MUST reference those exact tier names and numeric values whenever pricing is mentioned
+   in your assessment. Do NOT invent, round, or substitute different price figures.
+   Do NOT omit pricing from your assessment — reference the Finance tiers explicitly by name
+   and value (e.g. Starter: $50/month, Growth: $200/month) in your branding and messaging copy.
 
 Ground your answers in retrieved RAG document/research/framework evidence. Maintain a professional, executive tone.
 """
@@ -62,9 +69,15 @@ def execute_agent_logic(
     state: AgentState, 
     agent_name: str, 
     system_prompt: str, 
-    search_keyword: str
+    search_keyword: str,
+    extra_context: str = ""
 ) -> Dict[str, Any]:
-    """Helper function to execute specialized agent node reasoning, context retrieval, and database logging."""
+    """Helper function to execute specialized agent node reasoning, context retrieval, and database logging.
+    
+    Args:
+        extra_context: Optional additional context injected into the user prompt before the LLM call.
+                       Used by Marketing Agent to receive Finance Agent pricing tiers.
+    """
     project_id = state.get("project_id")
     idea = state.get("business_idea_input", "")
     directives = state.get("directives", "")
@@ -82,6 +95,9 @@ def execute_agent_logic(
         f"Orchestrator Directives:\n{directives}\n\n"
         f"Retrieved Document/Research Context:\n{context_str}"
     )
+    # Inject extra context (e.g. Finance pricing tiers for Marketing Agent) after base prompt
+    if extra_context:
+        user_prompt += f"\n\n{extra_context}"
     
     # 3. Call LLM (Meta Llama-3.1-70b-instruct via NVIDIA NIM)
     output = call_llm(
@@ -162,11 +178,37 @@ def finance_agent_node(state: AgentState) -> Dict[str, Any]:
     )
 
 def marketing_agent_node(state: AgentState) -> Dict[str, Any]:
+    """
+    Marketing Agent Node.
+    Runs AFTER Finance Agent completes (sequential dependency — see graph.py).
+    Extracts Finance Agent's finalized pricing tiers from state and injects them
+    as locked-in context so Marketing cannot hallucinate different price figures.
+    """
+    # Extract Finance pricing tiers from state to build the authoritative pricing block
+    finance_output = state.get("specialized_outputs", {}).get("finance", "")
+    
+    finance_pricing_context = ""
+    if finance_output and finance_output != "__FAILED__":
+        finance_pricing_context = (
+            "Finance Agent Pricing Tiers (Authoritative — Do Not Change):\n"
+            "The following pricing tiers were defined by the Finance Agent for this venture. "
+            "You MUST use these exact tier names and price values in any pricing references in "
+            "your marketing assessment. Do not invent, round, or substitute different numbers.\n"
+            f"{finance_output[:3000]}"  # cap to avoid prompt bloat — tiers appear near the top
+        )
+    else:
+        finance_pricing_context = (
+            "Finance Agent Pricing Tiers (Authoritative — Do Not Change):\n"
+            "Finance Agent output is not yet available. Do not include any specific pricing "
+            "figures in your marketing assessment; refer to pricing tiers generically instead."
+        )
+    
     return execute_agent_logic(
         state=state,
         agent_name="Marketing Agent",
         system_prompt=MARKETING_SYSTEM_PROMPT,
-        search_keyword="marketing sales channels client profile branding vectors"
+        search_keyword="marketing sales channels client profile branding vectors",
+        extra_context=finance_pricing_context
     )
 
 def risk_agent_node(state: AgentState) -> Dict[str, Any]:
