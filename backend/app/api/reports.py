@@ -38,8 +38,13 @@ def run_pipeline_background(project_id: str, project_record: Dict[str, Any]):
             ),
             "rag_context": retrieve_context(project_id, project_record['idea_input'], top_k=5),
             "plan": "",
+            "directives": "",
             "research_results": "",
             "specialized_outputs": {},
+            # Failure-tracking fields (required by pipeline gate nodes)
+            "failed_agents": [],
+            "pipeline_aborted": False,
+            "abort_reason": "",
             "council_feedback": [],
             "reviewer_notes": "",
             "critic_notes": "",
@@ -141,27 +146,42 @@ def download_report(report_id: str, format: str, current_user = Depends(get_curr
         raise HTTPException(status_code=404, detail="Report not found or access unauthorized")
         
     project_name = project_res.data[0]["name"]
-    report_type = report["report_type"]
-    content = report["content"]
+    report_type  = report["report_type"]
+    content      = report["content"]
+    
+    # Load the human-readable section labels from the report registry
+    # (section_labels maps field_key -> heading string for DOCX/PPTX/PDF exports)
+    try:
+        from app.pipeline.report_generator import _build_registry
+        _dummy_context = {k: "" for k in [
+            "idea", "strategy", "finance", "marketing", "risk",
+            "council_str", "reviewer", "critic", "rules_json",
+            "scores_json", "overall_score"
+        ]}
+        _dummy_context["overall_score"] = 0.0
+        registry = _build_registry(_dummy_context)
+        section_labels = registry.get(report_type, {}).get("export_mapping", {})
+    except Exception:
+        section_labels = {}
     
     clean_filename = f"{project_name.replace(' ', '_')}_{report_type.replace(' ', '_')}"
     
     if format.lower() == "docx":
-        file_stream = generate_docx(report_type, content, project_name)
+        file_stream = generate_docx(report_type, content, project_name, section_labels)
         return StreamingResponse(
             file_stream,
             media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
             headers={"Content-Disposition": f"attachment; filename={clean_filename}.docx"}
         )
     elif format.lower() == "pptx":
-        file_stream = generate_pptx(report_type, content, project_name)
+        file_stream = generate_pptx(report_type, content, project_name, section_labels)
         return StreamingResponse(
             file_stream,
             media_type="application/vnd.openxmlformats-officedocument.presentationml.presentation",
             headers={"Content-Disposition": f"attachment; filename={clean_filename}.pptx"}
         )
     elif format.lower() == "pdf":
-        file_stream = generate_pdf(report_type, content, project_name)
+        file_stream = generate_pdf(report_type, content, project_name, section_labels)
         return StreamingResponse(
             file_stream,
             media_type="application/pdf",

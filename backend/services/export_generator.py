@@ -1,5 +1,5 @@
 import io
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 from docx import Document
 from docx.shared import Inches, Pt
 from docx.enum.text import WD_ALIGN_PARAGRAPH
@@ -13,8 +13,18 @@ from reportlab.lib import colors
 def format_title(text: str) -> str:
     return text.replace("_", " ").title()
 
-def generate_docx(report_type: str, content: Dict[str, Any], project_name: str) -> io.BytesIO:
-    """Generates a styled Word document from report contents."""
+def generate_docx(
+    report_type: str,
+    content: Dict[str, Any],
+    project_name: str,
+    section_labels: Optional[Dict[str, str]] = None
+) -> io.BytesIO:
+    """Generates a styled Word document from report contents.
+    
+    Args:
+        section_labels: Optional mapping of field_key -> human-readable heading.
+                        Comes from the report registry's export_mapping.
+    """
     doc = Document()
     
     # Document Title / Cover Header
@@ -29,26 +39,32 @@ def generate_docx(report_type: str, content: Dict[str, Any], project_name: str) 
     
     # Sections Loop
     for section_name, section_content in content.items():
-        doc.add_heading(format_title(section_name), level=1)
+        heading = (section_labels or {}).get(section_name, format_title(section_name))
+        doc.add_heading(heading, level=1)
         
         if isinstance(section_content, list):
             for bullet in section_content:
                 doc.add_paragraph(str(bullet), style='List Bullet')
         else:
             doc.add_paragraph(str(section_content))
-        doc.add_paragraph() # Spacing
+        doc.add_paragraph()  # Spacing
         
     doc_io = io.BytesIO()
     doc.save(doc_io)
     doc_io.seek(0)
     return doc_io
 
-def generate_pptx(report_type: str, content: Dict[str, Any], project_name: str) -> io.BytesIO:
+def generate_pptx(
+    report_type: str,
+    content: Dict[str, Any],
+    project_name: str,
+    section_labels: Optional[Dict[str, str]] = None
+) -> io.BytesIO:
     """Generates a professional PowerPoint presentation deck from report contents."""
     prs = Presentation()
     
     # Slide 1: Cover Slide
-    slide_layout = prs.slide_layouts[0] # Title slide layout
+    slide_layout = prs.slide_layouts[0]  # Title slide layout
     slide = prs.slides.add_slide(slide_layout)
     title = slide.shapes.title
     subtitle = slide.placeholders[1]
@@ -57,17 +73,16 @@ def generate_pptx(report_type: str, content: Dict[str, Any], project_name: str) 
     subtitle.text = "AI Venture Studio Boardroom Blueprint"
     
     # Slides for each section
-    content_layout = prs.slide_layouts[5] # Blank layout with title
+    content_layout = prs.slide_layouts[5]  # Blank layout with title
     for section_name, section_content in content.items():
         slide = prs.slides.add_slide(content_layout)
-        
-        # Section Title
-        slide.shapes.title.text = format_title(section_name)
+        heading = (section_labels or {}).get(section_name, format_title(section_name))
+        slide.shapes.title.text = heading
         
         # Add textbox for text content
-        left = PptxInches(1)
-        top = PptxInches(2)
-        width = PptxInches(8)
+        left   = PptxInches(1)
+        top    = PptxInches(2)
+        width  = PptxInches(8)
         height = PptxInches(4.5)
         
         tx_box = slide.shapes.add_textbox(left, top, width, height)
@@ -77,16 +92,12 @@ def generate_pptx(report_type: str, content: Dict[str, Any], project_name: str) 
         if isinstance(section_content, list):
             for idx, bullet in enumerate(section_content):
                 p = tf.add_paragraph() if idx > 0 else tf.paragraphs[0]
-                p.text = f"• {bullet}"
+                p.text = f"\u2022 {bullet}"
                 p.font.size = PptxPt(16)
         else:
             p = tf.paragraphs[0]
-            # Handle potentially long string summaries by limiting slide text preview length
             text_str = str(section_content)
-            if len(text_str) > 600:
-                p.text = text_str[:570] + "..."
-            else:
-                p.text = text_str
+            p.text = text_str[:570] + "..." if len(text_str) > 600 else text_str
             p.font.size = PptxPt(16)
             
     ppt_io = io.BytesIO()
@@ -94,11 +105,16 @@ def generate_pptx(report_type: str, content: Dict[str, Any], project_name: str) 
     ppt_io.seek(0)
     return ppt_io
 
-def generate_pdf(report_type: str, content: Dict[str, Any], project_name: str) -> io.BytesIO:
+def generate_pdf(
+    report_type: str,
+    content: Dict[str, Any],
+    project_name: str,
+    section_labels: Optional[Dict[str, str]] = None
+) -> io.BytesIO:
     """Generates a highly-styled PDF document from report contents using reportlab."""
     pdf_io = io.BytesIO()
     doc = SimpleDocTemplate(
-        pdf_io, 
+        pdf_io,
         pagesize=letter,
         rightMargin=54,
         leftMargin=54,
@@ -116,7 +132,7 @@ def generate_pdf(report_type: str, content: Dict[str, Any], project_name: str) -
         fontSize=24,
         leading=28,
         textColor=colors.HexColor('#6366F1'),
-        alignment=1, # Center
+        alignment=1,  # Center
         spaceAfter=15
     )
     
@@ -172,18 +188,17 @@ def generate_pdf(report_type: str, content: Dict[str, Any], project_name: str) -
     story.append(Paragraph(f"{project_name} - {report_type}", title_style))
     story.append(Paragraph("Generated by AI Venture Studio Deliberation Pipeline", subtitle_style))
     story.append(Spacer(1, 20))
-    
-    # Divider line
     story.append(Paragraph("<font color='#E5E7EB'>__________________________________________________________________</font>", body_style))
     story.append(Spacer(1, 20))
     
     # Render sections
     for section_name, section_content in content.items():
-        story.append(Paragraph(format_title(section_name), h1_style))
+        heading = (section_labels or {}).get(section_name, format_title(section_name))
+        story.append(Paragraph(heading, h1_style))
         
         if isinstance(section_content, list):
             for bullet in section_content:
-                story.append(Paragraph(f"• {bullet}", bullet_style))
+                story.append(Paragraph(f"\u2022 {bullet}", bullet_style))
         else:
             story.append(Paragraph(str(section_content), body_style))
             
