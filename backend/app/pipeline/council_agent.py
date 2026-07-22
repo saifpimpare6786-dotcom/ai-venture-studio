@@ -91,6 +91,8 @@ def llm_council_node(state: AgentState) -> Dict[str, Any]:
     ]
     
     feedback_list = []
+    success_count = 0
+    failure_count = 0
     
     # Run the reviews concurrently using a ThreadPoolExecutor
     print("Executing Council debate reviews concurrently via ThreadPoolExecutor...")
@@ -109,11 +111,22 @@ def llm_council_node(state: AgentState) -> Dict[str, Any]:
             role = future_to_role[future]
             try:
                 result = future.result()
+                if result.startswith("Council review failed:"):
+                    failure_count += 1
+                    print(f"[LLM Council Node] Review failed for '{role}': {result}")
+                else:
+                    success_count += 1
                 feedback_list.append(f"### {role}\n{result}")
             except Exception as exc:
+                failure_count += 1
+                print(f"[LLM Council Node] Review threw exception for '{role}': {exc}")
                 feedback_list.append(f"### {role}\nReview threw an exception: {exc}")
-                
-    print(f"Concurrently completed {len(feedback_list)} council reviews.")
+
+    total_count = success_count + failure_count
+    print(
+        f"Concurrently completed {success_count}/{total_count} council reviews "
+        f"({failure_count} failed)."
+    )
     
     # 3. Log results to Supabase agent_logs
     try:
@@ -121,12 +134,14 @@ def llm_council_node(state: AgentState) -> Dict[str, Any]:
         supabase.table("agent_logs").insert({
             "project_id": project_id,
             "agent_name": "Council Agent",
-            "status": "completed",
+            "status": "completed" if failure_count == 0 else "warning",
             "input_data": {
                 "specialized_outputs_keys": list(outputs.keys())
             },
             "output_data": {
                 "feedback_count": len(feedback_list),
+                "success_count": success_count,
+                "failure_count": failure_count,
                 "feedback_preview": "\n\n".join(feedback_list)[:1000]
             }
         }).execute()

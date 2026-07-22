@@ -94,12 +94,25 @@ def execute_agent_logic(
     
     # Check if LLM call failed completely
     if isinstance(output, dict) and output.get("status") == "failed":
-        print(f"{agent_name} node failed: {output['error']}")
         agent_key = agent_name.lower().replace(" agent", "")
+        error_msg = output["error"]
+        print(f"[{agent_name} Node] FATAL: All LLM fallbacks exhausted — {error_msg}")
+        # Log the failure to Supabase so the Boardroom View shows it
+        try:
+            supabase = get_supabase_client()
+            supabase.table("agent_logs").insert({
+                "project_id": project_id,
+                "agent_name": agent_name,
+                "status": "failed",
+                "input_data": {"search_query": agent_query[:200]},
+                "output_data": {"error": error_msg}
+            }).execute()
+        except Exception as db_err:
+            print(f"Supabase failure-log warning for {agent_name}: {str(db_err)}")
+        # Write sentinel so downstream nodes can detect failure without parsing error text
         return {
-            "specialized_outputs": {
-                agent_key: f"Execution failed: {output['error']}"
-            }
+            "failed_agents": [agent_key],
+            "specialized_outputs": {agent_key: "__FAILED__"}
         }
     
     # 4. Log to Supabase agent_logs

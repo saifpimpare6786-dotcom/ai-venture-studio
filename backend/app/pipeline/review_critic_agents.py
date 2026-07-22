@@ -62,11 +62,24 @@ def reviewer_agent_node(state: AgentState) -> Dict[str, Any]:
         agent_name="Reviewer Agent"
     )
     
-    # Check if LLM call failed completely
+    # Check if LLM call failed completely — halt pipeline rather than propagating error text
     if isinstance(review, dict) and review.get("status") == "failed":
-        print(f"Reviewer Agent node failed: {review['error']}")
+        error_msg = review["error"]
+        print(f"[Reviewer Agent Node] FATAL: All LLM fallbacks exhausted — {error_msg}")
+        try:
+            supabase = get_supabase_client()
+            supabase.table("agent_logs").insert({
+                "project_id": project_id,
+                "agent_name": "Reviewer Agent",
+                "status": "failed",
+                "input_data": {"specialized_outputs_keys": list(outputs.keys())},
+                "output_data": {"error": error_msg}
+            }).execute()
+        except Exception as db_err:
+            print(f"Supabase failure-log warning for Reviewer Agent: {str(db_err)}")
         return {
-            "reviewer_notes": f"Execution failed: {review['error']}"
+            "failed_agents": ["reviewer"],
+            "reviewer_notes": "__FAILED__"
         }
     
     # 3. Log transaction to Supabase agent_logs
@@ -129,11 +142,24 @@ def critic_agent_node(state: AgentState) -> Dict[str, Any]:
         agent_name="Critic Agent"
     )
     
-    # Check if LLM call failed completely
+    # Check if LLM call failed completely — halt pipeline rather than propagating error text
     if isinstance(critique, dict) and critique.get("status") == "failed":
-        print(f"Critic Agent node failed: {critique['error']}")
+        error_msg = critique["error"]
+        print(f"[Critic Agent Node] FATAL: All LLM fallbacks exhausted — {error_msg}")
+        try:
+            supabase = get_supabase_client()
+            supabase.table("agent_logs").insert({
+                "project_id": project_id,
+                "agent_name": "Critic Agent",
+                "status": "failed",
+                "input_data": {"has_reviewer_notes": len(reviewer_notes) > 0},
+                "output_data": {"error": error_msg}
+            }).execute()
+        except Exception as db_err:
+            print(f"Supabase failure-log warning for Critic Agent: {str(db_err)}")
         return {
-            "critic_notes": f"Execution failed: {critique['error']}"
+            "failed_agents": ["critic"],
+            "critic_notes": "__FAILED__"
         }
     
     # 3. Log transaction to Supabase agent_logs

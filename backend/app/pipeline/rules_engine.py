@@ -24,13 +24,39 @@ Target JSON Format:
   ]
 }
 
-Ensure all extracted pricing values are floats. If no pricing values are found for a department, output an empty list [].
+Rules for price_val:
+- Use the exact numeric dollar/pound/euro value (as a float) if the assessment states a specific amount.
+- Use -1.0 if the tier is explicitly described as "custom pricing", "contact us", "quote on request", or similar non-numeric pricing that is INTENTIONAL for that tier (e.g. an Enterprise tier that says "contact us for pricing").
+- Use null ONLY if the tier name is mentioned but no price or pricing intent can be determined from the text (i.e. the data is simply absent).
+- If a department's assessment mentions NO pricing tiers at all, output an empty list [] for that department.
+
 Return ONLY the valid JSON block wrapped in a markdown code fence. Do not include any introductory or concluding text.
 """
 
+# Sentinel value for intentional "custom / contact-us" pricing
+_CUSTOM_PRICING_SENTINEL = -1.0
+
+
 class BusinessAssessmentPricing(BaseModel):
     tier_name: str
+    # price_val semantics:
+    #   > 0       → concrete numeric price (included in mismatch check)
+    #   -1.0      → intentional custom/contact-us pricing (skip mismatch)
+    #   None      → price truly absent / could not be determined
     price_val: Optional[float] = None
+
+    @property
+    def is_custom(self) -> bool:
+        return self.price_val is not None and self.price_val == _CUSTOM_PRICING_SENTINEL
+
+    @property
+    def is_missing(self) -> bool:
+        return self.price_val is None
+
+    @property
+    def is_numeric(self) -> bool:
+        return self.price_val is not None and self.price_val > 0
+
 
 class DomainAssessmentsData(BaseModel):
     target_country: str = Field(default="Global")
@@ -41,8 +67,24 @@ class DomainAssessmentsData(BaseModel):
 
     @model_validator(mode="after")
     def validate_pricing_consistency(self) -> 'DomainAssessmentsData':
-        all_tiers = {}
-        
+        errors = []
+
+        # ── Rule A: Empty pricing list = missing data, not a pass ──────────
+        source_map = {
+            "strategy": self.strategy_pricing,
+            "finance": self.finance_pricing,
+            "marketing": self.marketing_pricing,
+        }
+        empty_sources = [name for name, lst in source_map.items() if len(lst) == 0]
+        if empty_sources:
+            errors.append(
+                f"Missing pricing data: {', '.join(empty_sources)} returned no pricing "
+                f"tiers — cannot perform cross-source mismatch validation."
+            )
+            # Raise immediately; no point running per-tier checks with incomplete data
+            raise ValueError("; ".join(errors))
+
+        # ── Rule B: Per-tier cross-source mismatch check ────────────────────
         def normalise_tier(name: str) -> str:
             name = name.lower().strip()
             if "start" in name or "basic" in name:
@@ -53,25 +95,50 @@ class DomainAssessmentsData(BaseModel):
                 return "enterprise"
             return name
 
+        all_tiers: Dict[str, Dict[str, BusinessAssessmentPricing]] = {}
         for item in self.strategy_pricing:
-            all_tiers.setdefault(normalise_tier(item.tier_name), {})["strategy"] = item.price_val
+            all_tiers.setdefault(normalise_tier(item.tier_name), {})["strategy"] = item
         for item in self.finance_pricing:
-            all_tiers.setdefault(normalise_tier(item.tier_name), {})["finance"] = item.price_val
+            all_tiers.setdefault(normalise_tier(item.tier_name), {})["finance"] = item
         for item in self.marketing_pricing:
-            all_tiers.setdefault(normalise_tier(item.tier_name), {})["marketing"] = item.price_val
-        
-        errors = []
-        for normalized_tier, prices in all_tiers.items():
-            valid_prices = [p for p in prices.values() if p is not None and p > 0]
-            if len(valid_prices) >= 2:
-                min_price = min(valid_prices)
-                max_price = max(valid_prices)
+            all_tiers.setdefault(normalise_tier(item.tier_name), {})["marketing"] = item
+
+        for normalized_tier, source_items in all_tiers.items():
+            # ── Rule B1: None price alongside a real numeric price from another source ──
+            missing_sources = [
+                src for src, item in source_items.items() if item.is_missing
+            ]
+            numeric_sources = [
+                src for src, item in source_items.items() if item.is_numeric
+            ]
+            if missing_sources and numeric_sources:
+                errors.append(
+                    f"Tier '{normalized_tier}': null price_val in "
+                    f"{', '.join(missing_sources)} while "
+                    f"{', '.join(numeric_sources)} provide numeric prices — "
+                    f"possible upstream agent failure or extraction gap."
+                )
+
+            # ── Rule B2: Numeric-only mismatch (>2x spread) ─────────────────
+            # Custom-pricing tiers (-1.0) are intentionally excluded from the
+            # numeric comparison — they are not a data error.
+            numeric_prices = {
+                src: item.price_val
+                for src, item in source_items.items()
+                if item.is_numeric
+            }
+            if len(numeric_prices) >= 2:
+                min_price = min(numeric_prices.values())
+                max_price = max(numeric_prices.values())
                 if max_price > 2.0 * min_price:
-                    breakdown = ", ".join([f"{k}: {v}" for k, v in prices.items()])
-                    errors.append(
-                        f"Pricing mismatch for tier '{normalized_tier}': prices differ by more than 2x "
-                        f"({breakdown})"
+                    breakdown = ", ".join(
+                        [f"{k}: {v}" for k, v in numeric_prices.items()]
                     )
+                    errors.append(
+                        f"Pricing mismatch for tier '{normalized_tier}': prices differ "
+                        f"by more than 2x ({breakdown})"
+                    )
+
         if errors:
             raise ValueError("; ".join(errors))
         return self
@@ -132,17 +199,30 @@ def business_rules_engine_node(state: AgentState) -> Dict[str, Any]:
     Consumes assessment details from Strategy, Finance, and Marketing.
     Applies Pydantic validations to enforce pricing consistency and currency verification.
     Records errors if any check fails, and saves output to rules_validation_result.
+
+    Hard-exits immediately (is_valid=False) if the pipeline was already aborted upstream.
     """
     project_id = state.get("project_id")
     idea = state.get("business_idea_input", "")
     outputs = state.get("specialized_outputs", {})
-    
+
     print(f"--- [Business Rules Engine Node] Starting execution for Project {project_id} ---")
-    
+
+    # ── Early-exit if an upstream gate already aborted the pipeline ─────────
+    if state.get("pipeline_aborted"):
+        abort_reason = state.get("abort_reason", "Upstream pipeline failure.")
+        print(f"[Business Rules Engine] Skipping validation — pipeline already aborted: {abort_reason}")
+        rules_result = {
+            "is_valid": False,
+            "errors": [f"Validation skipped — pipeline aborted upstream: {abort_reason}"],
+            "extracted_data": {}
+        }
+        return {"rules_validation_result": rules_result}
+
     strategy_text = outputs.get("strategy", "")
     finance_text = outputs.get("finance", "")
     marketing_text = outputs.get("marketing", "")
-    
+
     user_prompt = (
         f"BUSINESS IDEA:\n{idea}\n\n"
         f"STRATEGY ASSESSMENT:\n{strategy_text}\n\n"
@@ -150,7 +230,7 @@ def business_rules_engine_node(state: AgentState) -> Dict[str, Any]:
         f"MARKETING PLAN:\n{marketing_text}"
     )
     
-    # 1. Structured data extraction via Gemini to conserve rate limit budgets
+    # 1. Structured data extraction via LLM
     extracted_dict = {}
     try:
         raw_json_str = call_llm(

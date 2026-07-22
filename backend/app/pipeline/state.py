@@ -7,6 +7,13 @@ def merge_dict(left: Dict[str, Any], right: Dict[str, Any]) -> Dict[str, Any]:
         new_dict.update(right)
     return new_dict
 
+def list_append_reducer(left: List[str], right: List[str]) -> List[str]:
+    """Reducer that appends new items to the existing list (used for failed_agents)."""
+    result = list(left) if left else []
+    if right:
+        result.extend(right)
+    return result
+
 class AgentState(TypedDict):
     """
     State schema for the LangGraph orchestrator graph.
@@ -20,6 +27,10 @@ class AgentState(TypedDict):
     directives: NotRequired[str]
     research_results: str
     specialized_outputs: Annotated[Dict[str, str], merge_dict]
+    # Failure tracking: accumulated across parallel branches via list_append_reducer
+    failed_agents: NotRequired[Annotated[List[str], list_append_reducer]]
+    pipeline_aborted: NotRequired[bool]
+    abort_reason: NotRequired[str]
     council_feedback: List[str]
     reviewer_notes: str
     critic_notes: str
