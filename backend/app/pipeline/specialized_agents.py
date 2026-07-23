@@ -15,12 +15,13 @@ Deliver an expert assessment covering:
 1. Market Fit Assessment: The validity of the problem-solution fit.
 2. Competitive Landscape: Identification of key direct and indirect competitors or categories.
 3. Strategic Position: Unique selling propositions (USPs) and strategic recommendations.
-   PRICING NOTE: Do NOT include specific dollar or pound values for pricing tiers in your
-   assessment. Pricing figures are the exclusive domain of the Finance Agent. You may comment
-   on pricing APPROACH (e.g. "a value-based SaaS subscription model is appropriate",
-   "freemium entry with premium upgrade", "enterprise pricing should be quote-based") but
-   must not state numeric prices. The Business Rules Engine will cross-validate prices from
-   Finance and Marketing — Strategy's role is competitive and strategic context only.
+   PRICING ALIGNMENT: The Finance Agent has already established authoritative pricing tiers
+   for this venture (provided below as FINANCE PRICING REFERENCE). When discussing pricing
+   in your assessment, you MUST reference those exact tier names and numeric values. Do NOT
+   invent different prices. You may frame pricing strategically (e.g. competitive positioning,
+   value-based rationale) but the numbers must match the Finance Agent's output exactly.
+
+{finance_pricing_context}
 
 Ground your answers in retrieved RAG document/research evidence. Maintain a professional, executive tone.
 """
@@ -179,11 +180,38 @@ def execute_agent_logic(
     }
 
 def strategy_agent_node(state: AgentState) -> Dict[str, Any]:
+    """
+    Strategy Agent Node.
+    Runs AFTER Finance Agent completes (sequential dependency — see graph.py).
+    Extracts Finance Agent's finalized pricing tiers from state and injects them
+    as locked-in context so Strategy references the same prices as Finance/Marketing,
+    ensuring all three sources align for Business Rules Engine validation.
+    """
+    # Extract Finance pricing tiers from state to build the authoritative pricing block
+    finance_output = state.get("specialized_outputs", {}).get("finance", "")
+
+    if finance_output and finance_output != "__FAILED__":
+        finance_pricing_context = (
+            "FINANCE PRICING REFERENCE (Authoritative — Use These Exact Values):\n"
+            "The Finance Agent has defined the following pricing tiers for this venture. "
+            "When discussing pricing strategy, you MUST reference these exact tier names "
+            "and numeric values. Do not round, adjust, or substitute different numbers.\n"
+            f"{finance_output[:3000]}"  # cap to avoid prompt bloat — tiers appear near top
+        )
+    else:
+        finance_pricing_context = (
+            "FINANCE PRICING REFERENCE:\n"
+            "Finance Agent output is not yet available. Refer to pricing tiers generically "
+            "without stating specific numeric values."
+        )
+
     return execute_agent_logic(
         state=state,
         agent_name="Strategy Agent",
-        system_prompt=STRATEGY_SYSTEM_PROMPT,
-        search_keyword="strategy competitive landscape market fit positioning"
+        system_prompt=STRATEGY_SYSTEM_PROMPT.format(
+            finance_pricing_context=finance_pricing_context
+        ),
+        search_keyword="strategy competitive landscape market fit positioning",
     )
 
 def finance_agent_node(state: AgentState) -> Dict[str, Any]:

@@ -28,12 +28,6 @@ Rules for price_val:
 - Use the exact numeric dollar/pound/euro value (as a float) if the assessment states a specific amount.
 - Use -1.0 if the tier is explicitly described as "custom pricing", "contact us", "quote on request", or similar non-numeric pricing that is INTENTIONAL for that tier (e.g. an Enterprise tier that says "contact us for pricing").
 - Use null ONLY if the tier name is mentioned but no price or pricing intent can be determined from the text (i.e. the data is simply absent).
-- If a department's assessment mentions NO pricing tiers at all, output an empty list [] for that department.
-
-Important notes on the Strategy assessment:
-- The Strategy Agent is NOT a pricing source. It discusses pricing APPROACH (e.g. "value-based SaaS model") but intentionally omits specific numeric prices.
-- If the Strategy assessment contains no numeric prices, output strategy_pricing: [] — this is correct and expected.
-- Finance and Marketing assessments ARE the authoritative pricing sources and must always contain full tier data with numeric prices.
 
 Return ONLY the valid JSON block wrapped in a markdown code fence. Do not include any introductory or concluding text.
 """
@@ -74,20 +68,21 @@ class DomainAssessmentsData(BaseModel):
     def validate_pricing_consistency(self) -> 'DomainAssessmentsData':
         errors = []
 
-        # ── Rule A: Finance and Marketing MUST both have pricing data ────────
-        # Strategy Agent is not a pricing source (it runs in parallel with Finance
-        # and is instructed to defer all numeric prices to Finance). An empty
-        # strategy_pricing list is therefore expected and acceptable.
-        # Finance and Marketing are the two authoritative pricing sources — both
-        # must return at least one tier for cross-validation to be meaningful.
-        primary_sources = {
+        # ── Rule A: ALL THREE sources must have pricing data ────────────────────
+        # Strategy, Finance, and Marketing must each return at least one tier.
+        # An empty list from any source means the agent failed to output pricing
+        # OR the extraction failed — either way, cross-validation is meaningless.
+        # (Strategy receives Finance's finalized pricing context via state before
+        #  it runs, so an empty strategy_pricing is an extraction/agent failure.)
+        source_map = {
+            "strategy":  self.strategy_pricing,
             "finance":   self.finance_pricing,
             "marketing": self.marketing_pricing,
         }
-        empty_primary = [name for name, lst in primary_sources.items() if len(lst) == 0]
-        if empty_primary:
+        empty_sources = [name for name, lst in source_map.items() if len(lst) == 0]
+        if empty_sources:
             errors.append(
-                f"Missing pricing data: {', '.join(empty_primary)} returned no pricing "
+                f"Missing pricing data: {', '.join(empty_sources)} returned no pricing "
                 f"tiers — cannot perform cross-source mismatch validation."
             )
             raise ValueError("; ".join(errors))

@@ -180,7 +180,7 @@ def run_phase3_test():
     safe_print("[Research results preview]:")
     safe_print(mock_state["research_results"][:600] + ("..." if len(mock_state["research_results"]) > 600 else ""))
 
-    # Step 4 — Finance Agent (must run before Marketing)
+    # Step 4 — Finance Agent (must run before Strategy AND Marketing)
     subsection("Step 4 — Finance Agent")
     fin_out = finance_agent_node(mock_state)
     mock_state["specialized_outputs"].update(fin_out.get("specialized_outputs", {}))
@@ -189,17 +189,8 @@ def run_phase3_test():
     safe_print("[Finance Agent preview]:")
     safe_print(mock_state["specialized_outputs"].get("finance", "")[:600] + "...")
 
-    # Step 5 — Marketing Agent (reads Finance output from state)
-    subsection("Step 5 — Marketing Agent  [reads Finance pricing from state]")
-    mkt_out = marketing_agent_node(mock_state)
-    mock_state["specialized_outputs"].update(mkt_out.get("specialized_outputs", {}))
-    if mkt_out.get("failed_agents"):
-        mock_state["failed_agents"].extend(mkt_out["failed_agents"])
-    safe_print("[Marketing Agent preview]:")
-    safe_print(mock_state["specialized_outputs"].get("marketing", "")[:600] + "...")
-
-    # Step 6 — Strategy Agent
-    subsection("Step 6 — Strategy Agent")
+    # Step 5 — Strategy Agent  [reads Finance pricing from state — matches graph topology]
+    subsection("Step 5 — Strategy Agent  [reads Finance pricing from state]")
     strat_out = strategy_agent_node(mock_state)
     mock_state["specialized_outputs"].update(strat_out.get("specialized_outputs", {}))
     if strat_out.get("failed_agents"):
@@ -207,7 +198,16 @@ def run_phase3_test():
     safe_print("[Strategy Agent preview]:")
     safe_print(mock_state["specialized_outputs"].get("strategy", "")[:600] + "...")
 
-    # Step 7 — Risk Agent
+    # Step 6 — Marketing Agent  [reads Finance pricing from state, parallel with Strategy in graph]
+    subsection("Step 6 — Marketing Agent  [reads Finance pricing from state]")
+    mkt_out = marketing_agent_node(mock_state)
+    mock_state["specialized_outputs"].update(mkt_out.get("specialized_outputs", {}))
+    if mkt_out.get("failed_agents"):
+        mock_state["failed_agents"].extend(mkt_out["failed_agents"])
+    safe_print("[Marketing Agent preview]:")
+    safe_print(mock_state["specialized_outputs"].get("marketing", "")[:600] + "...")
+
+    # Step 7 — Risk Agent  [runs in parallel with Finance in the graph; sequential here for simplicity]
     subsection("Step 7 — Risk Agent")
     risk_out = risk_agent_node(mock_state)
     mock_state["specialized_outputs"].update(risk_out.get("specialized_outputs", {}))

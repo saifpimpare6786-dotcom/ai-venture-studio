@@ -182,6 +182,10 @@ Target JSON Format — return ONLY this block wrapped in ```json ... ```:
         "Business Plan": {
             "schema": BusinessPlanSchema,
             "export_formats": ["docx", "pdf"],
+            # Business Plan is the longest report (5 detailed text fields + risk list).
+            # max_tokens=4096 prevents NIM from truncating mid-JSON on this type.
+            # All other report types stay at the default 1024.
+            "max_tokens": 4096,
             "export_mapping": {
                 "company_description":    "Company Description & Mission",
                 "market_analysis":        "Market Analysis & Landscape",
@@ -389,8 +393,86 @@ Target JSON Format — return ONLY this block wrapped in ```json ... ```:
 
 
 # ---------------------------------------------------------------------------
-# Report Generator Node
+# JSON generation helper with repair retry
 # ---------------------------------------------------------------------------
+
+JSON_REPAIR_PROMPT = """
+The following JSON is malformed or truncated (it may have been cut off mid-string).
+Return the COMPLETE, VALID JSON object below, fixing any truncation or unescaped characters.
+Do NOT add new fields or change existing values — only fix structural JSON errors.
+Wrap your output in ```json ... ``` fences.
+
+Malformed input:
+{malformed}
+"""
+
+
+def _generate_report_json(
+    report_type: str,
+    config: dict,
+    project_id: str,
+) -> dict:
+    """
+    Calls the LLM to generate one report's JSON, with a one-shot JSON repair retry.
+
+    Strategy:
+    1. First call uses the full system_prompt with the report type's max_tokens.
+    2. On JSONDecodeError (truncation or bad escape), re-prompts the LLM with the
+       malformed output and a repair instruction — one retry only.
+    3. On second failure, raises so the caller's per-report try/except captures it.
+
+    Args:
+        config: Registry entry dict (must contain system_prompt; optionally max_tokens).
+    Returns:
+        Parsed report_content dict ready for schema coercion and Pydantic validation.
+    Raises:
+        ValueError / json.JSONDecodeError: on total failure (both attempts).
+    """
+    max_tokens = config.get("max_tokens", 1024)
+    preferred   = config.get("preferred_provider", "gemini")
+
+    # ── Attempt 1: normal generation ─────────────────────────────────────
+    raw_text = call_llm(
+        prompt="Generate the report as instructed.",
+        system_prompt=config["system_prompt"],
+        preferred_provider=preferred,
+        project_id=project_id,
+        agent_name=f"{report_type} Generator",
+        max_tokens=max_tokens,
+    )
+
+    if isinstance(raw_text, dict) and raw_text.get("status") == "failed":
+        raise ValueError(raw_text["error"])
+
+    cleaned = extract_json_block(raw_text)
+
+    try:
+        return json.loads(cleaned)
+    except json.JSONDecodeError as first_err:
+        print(
+            f"[Report Generator] '{report_type}' — JSON parse error on attempt 1: {first_err}. "
+            f"Attempting JSON repair retry..."
+        )
+
+    # ── Attempt 2: repair retry ───────────────────────────────────────────
+    repair_prompt = JSON_REPAIR_PROMPT.format(malformed=cleaned[:6000])
+    repaired_text = call_llm(
+        prompt=repair_prompt,
+        system_prompt="You are a JSON repair assistant. Return only valid JSON wrapped in ```json ... ``` fences.",
+        preferred_provider=preferred,
+        project_id=project_id,
+        agent_name=f"{report_type} Generator [JSON Repair]",
+        max_tokens=max_tokens,
+    )
+
+    if isinstance(repaired_text, dict) and repaired_text.get("status") == "failed":
+        raise ValueError(f"JSON repair LLM call failed: {repaired_text['error']}")
+
+    repaired_cleaned = extract_json_block(repaired_text)
+    # Let JSONDecodeError propagate — caller's except clause will catch it
+    return json.loads(repaired_cleaned)
+
+
 
 def report_generator_node(state: AgentState) -> Dict[str, Any]:
     """
@@ -467,21 +549,8 @@ def report_generator_node(state: AgentState) -> Dict[str, Any]:
                 )
                 raise ValueError(f"Business Rules Engine validation failed or not run: {validation_errors}")
 
-            # Call Gemini to generate the report JSON
-            raw_text = call_llm(
-                prompt="Generate the report as instructed.",
-                system_prompt=config["system_prompt"],
-                preferred_provider="gemini",
-                project_id=project_id,
-                agent_name=f"{report_type} Generator"
-            )
-
-            if isinstance(raw_text, dict) and raw_text.get("status") == "failed":
-                raise ValueError(raw_text["error"])
-
-            # Parse JSON from LLM response
-            cleaned_json = extract_json_block(raw_text)
-            report_content = json.loads(cleaned_json)
+            # Generate JSON via helper (includes JSON repair retry on truncation)
+            report_content = _generate_report_json(report_type, config, project_id)
 
             # Coerce field types to match schema before Pydantic validation
             report_content = _coerce_schema_fields(report_content, config["schema"])

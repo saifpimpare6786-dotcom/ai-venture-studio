@@ -50,9 +50,13 @@ def call_gemini(prompt: str, system_prompt: str = None) -> str:
             
     raise RuntimeError("Gemini API call failed after maximum retries.")
 
-def call_nvidia_nim(prompt: str, system_prompt: str = None) -> str:
+def call_nvidia_nim(prompt: str, system_prompt: str = None, max_tokens: int = 1024) -> str:
     """
     Calls the NVIDIA NIM API (meta/llama-3.1-70b-instruct) with built-in 429 rate limit backoff.
+    
+    Args:
+        max_tokens: Token budget for the completion. Default 1024 is fine for most agent nodes.
+                    Long-form report types (e.g. Business Plan) should pass 4096.
     """
     url = "https://integrate.api.nvidia.com/v1/chat/completions"
     headers = {
@@ -69,7 +73,7 @@ def call_nvidia_nim(prompt: str, system_prompt: str = None) -> str:
         "model": "meta/llama-3.1-70b-instruct",
         "messages": messages,
         "temperature": 0.2,
-        "max_tokens": 1024
+        "max_tokens": max_tokens
     }
     
     max_retries = 3
@@ -100,7 +104,8 @@ def call_llm(
     system_prompt: str = None,
     preferred_provider: str = "nvidia",
     project_id: str = None,
-    agent_name: str = None
+    agent_name: str = None,
+    max_tokens: int = 1024
 ) -> Union[str, Dict[str, Any]]:
     """
     Wrapper offering failover. If preferred model provider fails,
@@ -108,6 +113,10 @@ def call_llm(
     If BOTH providers fail, it does not raise an exception — instead:
       1. Logs the failure transaction to Supabase agent_logs (if project_id & agent_name are passed).
       2. Returns a structured error dictionary: {"status": "failed", "error": "Error details..."}
+    
+    Args:
+        max_tokens: Completion token budget passed to NVIDIA NIM. Default 1024 is fine for
+                    agent reasoning nodes. Long-form reports (Business Plan etc.) should pass 4096.
     """
     primary_err = None
     fallback_err = None
@@ -115,7 +124,7 @@ def call_llm(
     if preferred_provider == "nvidia":
         # 1. Execute NIM primary
         try:
-            return call_nvidia_nim(prompt, system_prompt)
+            return call_nvidia_nim(prompt, system_prompt, max_tokens=max_tokens)
         except Exception as e:
             primary_err = str(e)
             print(f"WARNING: NVIDIA NIM failed. Falling back to Gemini API. Error: {primary_err}")
@@ -136,7 +145,7 @@ def call_llm(
         
         # 2. Execute NIM fallback
         try:
-            return call_nvidia_nim(prompt, system_prompt)
+            return call_nvidia_nim(prompt, system_prompt, max_tokens=max_tokens)
         except Exception as e:
             fallback_err = str(e)
             print(f"ERROR: NVIDIA NIM fallback also failed. Error: {fallback_err}")

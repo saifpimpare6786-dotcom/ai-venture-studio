@@ -113,21 +113,23 @@ workflow.add_edge("planning", "orchestrator")
 workflow.add_edge("orchestrator", "research")
 
 # Fan-out to specialized agents:
-#   Strategy, Finance, and Risk run in parallel from Research.
-#   Marketing runs SEQUENTIALLY after Finance so it can read Finance's
-#   finalized pricing tiers from state before constructing its prompt.
-#   This prevents Marketing from hallucinating different price figures.
-workflow.add_edge("research", "strategy")
+#   Finance and Risk run in parallel directly from Research.
+#   Strategy and Marketing BOTH run sequentially after Finance so they can
+#   read Finance's finalized pricing tiers from state before constructing
+#   their prompts. This keeps all three pricing sources (Strategy, Finance,
+#   Marketing) consistent for Business Rules Engine validation.
 workflow.add_edge("research", "finance")
 workflow.add_edge("research", "risk")
+workflow.add_edge("finance", "strategy")   # Strategy depends on Finance output
 workflow.add_edge("finance", "marketing")  # Marketing depends on Finance output
 
 # Fan-in through Gate 1 before Council.
-# Note: Finance fans into Marketing (sequential), so Marketing is the terminal
-# node of that branch and routes into the gate, not Finance directly.
-workflow.add_edge("strategy", "pipeline_gate")
-workflow.add_edge("marketing", "pipeline_gate")  # terminal of Finance→Marketing chain
-workflow.add_edge("risk", "pipeline_gate")
+# Finance fans into both Strategy and Marketing (parallel after Finance).
+# Both Strategy and Marketing are terminal nodes of their branches and route
+# into the gate. Risk routes directly from Research into the gate.
+workflow.add_edge("strategy",  "pipeline_gate")
+workflow.add_edge("marketing", "pipeline_gate")
+workflow.add_edge("risk",      "pipeline_gate")
 
 # Gate 1 conditional: healthy → Council, aborted → END
 workflow.add_conditional_edges("pipeline_gate", route_after_gate)
