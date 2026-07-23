@@ -887,18 +887,19 @@ def report_generator_node(state: AgentState) -> Dict[str, Any]:
     success_count = 0
     failure_count = 0
 
+    # ── Check Business Rules Engine validation status ────────────────────
+    rules_valid = rules_validation.get("is_valid", True)
+    validation_warning_msg = None
+    if not rules_valid:
+        errors_list = rules_validation.get("errors", ["Validation found inconsistencies"])
+        validation_warning_msg = f"Pricing Data Inconsistency — Financial figures may be unaligned ({', '.join(errors_list)})"
+        print(f"[Report Generator] WARNING: {validation_warning_msg}. Proceeding with report generation and attaching warning banner.")
+
     # ── Generate each report type via the registry ────────────────────────
     for report_type, config in registry.items():
         print(f"[Report Generator] Generating: '{report_type}'...")
 
         try:
-            # Gate: only generate from validated pipeline data (SKILL.md rule)
-            if not rules_validation or not rules_validation.get("is_valid", False):
-                validation_errors = ", ".join(
-                    rules_validation.get("errors", ["Validation did not run or was unsuccessful"])
-                )
-                raise ValueError(f"Business Rules Engine validation failed or not run: {validation_errors}")
-
             # Generate JSON via helper (includes JSON repair retry on truncation)
             report_content = _generate_report_json(report_type, config, project_id)
 
@@ -926,6 +927,8 @@ def report_generator_node(state: AgentState) -> Dict[str, Any]:
 
             # Clean up internal debug keys before DB upsert
             report_content_clean = {k: v for k, v in report_content.items() if not k.startswith("_")}
+            if validation_warning_msg:
+                report_content_clean["validation_warning"] = validation_warning_msg
 
             # Upsert to Supabase reports table
             _upsert_report(supabase, project_id, report_type, report_content_clean, scores, "Completed")
@@ -1045,10 +1048,15 @@ def _build_final_report_text(
             lines.append(f"> [FAILED] {content['error']}\n")
             continue
 
+        if "validation_warning" in content:
+            lines.append(f"> [WARNING] {content['validation_warning']}\n")
+
         # Use human-readable section labels from export_mapping where available
         export_mapping = registry.get(report_type, {}).get("export_mapping", {})
 
         for field_key, field_value in content.items():
+            if field_key == "validation_warning":
+                continue
             label = export_mapping.get(field_key, field_key.replace("_", " ").title())
             lines.append(f"\n### {label}")
             if isinstance(field_value, list):

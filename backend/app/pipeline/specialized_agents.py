@@ -20,6 +20,8 @@ Deliver an expert assessment covering:
    in your assessment, you MUST reference those exact tier names and numeric values. Do NOT
    invent different prices. You may frame pricing strategically (e.g. competitive positioning,
    value-based rationale) but the numbers must match the Finance Agent's output exactly.
+   You MUST state the concrete numeric price for EVERY tier defined by Finance, including any
+   Enterprise price floor figure (e.g., 'Enterprise: from £500/month').
 
 {finance_pricing_context}
 
@@ -64,8 +66,8 @@ Deliver an expert assessment covering:
    "Finance Agent Pricing Tiers (Authoritative — Do Not Change)" in your user prompt.
    You MUST reference those exact tier names and numeric values whenever pricing is mentioned
    in your assessment. Do NOT invent, round, or substitute different price figures.
-   Do NOT omit pricing from your assessment — reference the Finance tiers explicitly by name
-   and value (e.g. Starter: $50/month, Growth: $200/month) in your branding and messaging copy.
+   Include all tiers explicitly by name and numeric value (including Enterprise price floors,
+   e.g. Starter: $50/month, Growth: $200/month, Enterprise: from $500/month) in your branding and messaging copy.
 
 Ground your answers in retrieved RAG document/research/framework evidence. Maintain a professional, executive tone.
 """

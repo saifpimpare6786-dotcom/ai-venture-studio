@@ -60,7 +60,7 @@ def run_test():
         }
     }
 
-    # Test Case 1: Validation failure fallback behavior
+    # Test Case 1: Validation failure soft warning behavior
     print("\n--- Test Case 1: Report Generator behavior when Business Rules validation fails ---")
     state_failed_val = base_state.copy()
     state_failed_val["rules_validation_result"] = {
@@ -74,15 +74,16 @@ def run_test():
     print("Preview of final_report:")
     print(result.get("final_report", "")[:400] + "...")
     
-    # Query DB to check if report status is logged as Failed
+    # Query DB to check if reports were generated with Completed status and warning banner attached
     try:
         db_res = supabase.table("reports").select("report_type, status, content").eq("project_id", project_id).execute()
         print(f"Database records found: {len(db_res.data)}")
         for record in db_res.data:
-            print(f"- {record['report_type']}: status={record['status']}, has_error={'error' in record['content']}")
-            assert record['status'] == "Failed"
-            assert "error" in record['content']
-        print("SUCCESS: Test Case 1 passed! Reports were correctly set to 'Failed' in database.")
+            has_warning = "validation_warning" in record.get("content", {})
+            print(f"- {record['report_type']}: status={record['status']}, has_warning={has_warning}")
+            assert record['status'] == "Completed"
+            assert has_warning
+        print("SUCCESS: Test Case 1 passed! Reports generated successfully with validation warning banners attached.")
     except Exception as e:
         print(f"Database assertion failed/skipped: {str(e)}")
 

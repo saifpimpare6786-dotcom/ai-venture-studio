@@ -25,8 +25,8 @@ Target JSON Format:
 }
 
 Rules for price_val:
-- Use the exact numeric dollar/pound/euro value (as a float) if the assessment states a specific amount.
-- Use -1.0 if the tier is explicitly described as "custom pricing", "contact us", "quote on request", or similar non-numeric pricing that is INTENTIONAL for that tier (e.g. an Enterprise tier that says "contact us for pricing").
+- Use the exact numeric dollar/pound/euro value (as a float) if the assessment states a specific amount OR a starting price floor (e.g., 'from $500/month', 'Enterprise: starting at £1000 (negotiated)' → extract 500.0 or 1000.0). Even if terms like 'negotiated', 'custom contract', or 'starting from' are present alongside a number, ALWAYS extract the numeric figure as float.
+- Use -1.0 ONLY if the tier is explicitly described WITHOUT ANY numeric figures (e.g., 'contact us for pricing', 'custom quote on request' where no dollar/pound number exists).
 - Use null ONLY if the tier name is mentioned but no price or pricing intent can be determined from the text (i.e. the data is simply absent).
 
 Return ONLY the valid JSON block wrapped in a markdown code fence. Do not include any introductory or concluding text.
