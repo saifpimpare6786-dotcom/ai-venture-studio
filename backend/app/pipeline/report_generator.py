@@ -35,6 +35,56 @@ def extract_json_block(text: str) -> str:
     return text.strip()
 
 
+# ---------------------------------------------------------------------------
+# Token estimation utilities (diagnostic — no external dependency)
+# ---------------------------------------------------------------------------
+
+def _estimate_tokens(text: str) -> int:
+    """Rough token estimate: 1 token ≈ 4 characters (industry standard heuristic)."""
+    return max(1, len(text) // 4)
+
+
+def _log_prompt_token_estimates(context: dict) -> None:
+    """
+    Prints estimated input token counts for each report type to stdout.
+    Called once per pipeline run before generation starts — surfaces the
+    root cause of overlong prompts without requiring a tokenizer dependency.
+
+    Estimates are intentionally conservative (chars/4); real counts will be
+    slightly lower with BPE tokenizers but this is a reliable upper bound.
+    """
+    idea         = context.get("idea", "")
+    strategy     = context.get("strategy", "")
+    finance      = context.get("finance", "")
+    marketing    = context.get("marketing", "")
+    risk         = context.get("risk", "")
+    council_str  = context.get("council_str", "")
+    reviewer     = context.get("reviewer", "")
+    critic       = context.get("critic", "")
+    rules_json   = context.get("rules_json", "")
+    scores_json  = context.get("scores_json", "")
+
+    # Business Plan uses capped versions — reflect that in the estimate
+    bp_ctx = (
+        idea + strategy[:2500] + finance[:2500] + marketing[:2000]
+        + risk[:1500] + council_str[:1500] + reviewer[:1000] + critic[:1000]
+    )
+    exec_ctx  = idea + strategy + finance + marketing + risk + council_str + reviewer + critic + scores_json
+    swot_ctx  = idea + strategy + risk + council_str + critic + marketing
+    fin_ctx   = idea + finance + strategy + marketing + rules_json + scores_json
+    inv_ctx   = idea + scores_json + critic + reviewer + council_str + rules_json + strategy[:1500] + finance[:1500]
+
+    print(
+        "[Report Generator] Estimated input token counts per report type:\n"
+        f"  Executive Summary    : ~{_estimate_tokens(exec_ctx):,} tokens\n"
+        f"  SWOT Analysis        : ~{_estimate_tokens(swot_ctx):,} tokens\n"
+        f"  Financial Projection : ~{_estimate_tokens(fin_ctx):,} tokens\n"
+        f"  Investment Readiness : ~{_estimate_tokens(inv_ctx):,} tokens\n"
+        f"  Business Plan (capped): ~{_estimate_tokens(bp_ctx):,} tokens  "
+        f"[raw uncapped: ~{_estimate_tokens(idea + strategy + finance + marketing + risk + council_str + reviewer + critic):,}]"
+    )
+
+
 def _coerce_schema_fields(report_content: dict, schema_class) -> dict:
     """
     Pre-validate/coerce schema fields before Pydantic validation.
@@ -115,6 +165,20 @@ def _build_registry(context: dict) -> dict:
     # Each report type gets a focused prompt that foregrounds the data most
     # relevant to it, reducing token noise for the LLM.
 
+    # Business Plan input caps — applied before interpolation to bound the
+    # total input token count to ~3500–4500 tokens (vs a potential 8000+ with
+    # full agent outputs). Caps are generous enough to retain all key content
+    # from typical agent outputs (800–1500 tokens each). The Investment
+    # Readiness report already uses strategy[:1500] / finance[:1500] as the
+    # established pattern — Business Plan extends this to all 8 context fields.
+    bp_strategy    = strategy[:2500]
+    bp_finance     = finance[:2500]
+    bp_marketing   = marketing[:2000]
+    bp_risk        = risk[:1500]
+    bp_council     = council_str[:1500]
+    bp_reviewer    = reviewer[:1000]
+    bp_critic      = critic[:1000]
+
     return {
         # ── 1. Executive Summary ────────────────────────────────────────────
         "Executive Summary": {
@@ -178,67 +242,7 @@ Target JSON Format — return ONLY this block wrapped in ```json ... ```:
 """,
         },
 
-        # ── 2. Business Plan ────────────────────────────────────────────────
-        "Business Plan": {
-            "schema": BusinessPlanSchema,
-            "export_formats": ["docx", "pdf"],
-            # Business Plan is the longest report (5 detailed text fields + risk list).
-            # max_tokens=4096 prevents NIM from truncating mid-JSON on this type.
-            # All other report types stay at the default 1024.
-            "max_tokens": 4096,
-            "export_mapping": {
-                "company_description":    "Company Description & Mission",
-                "market_analysis":        "Market Analysis & Landscape",
-                "marketing_sales_strategy": "Marketing & Sales Strategy",
-                "operational_plan":       "Operational & Compliance Roadmap",
-                "financial_plan":         "Financial Plan & Pricing Structures",
-                "risk_register":          "Risk Register & Mitigations",
-            },
-            "system_prompt": f"""You are the Report Generator for AI Venture Studio.
-Generate a comprehensive Business Plan JSON suitable for bank or investor submission.
-
-Primary inputs:
-BUSINESS IDEA:
-{idea}
-
-STRATEGY ASSESSMENT:
-{strategy}
-
-FINANCE ASSESSMENT:
-{finance}
-
-MARKETING PLAN:
-{marketing}
-
-RISK ASSESSMENT:
-{risk}
-
-COUNCIL DEBATE NOTES:
-{council_str}
-
-REVIEWER NOTES:
-{reviewer}
-
-CRITIC NOTES:
-{critic}
-
-Target JSON Format — return ONLY this block wrapped in ```json ... ```:
-{{
-  "company_description": "Strategic vision, mission statement, problem-solution alignment, and venture model details...",
-  "market_analysis": "Industry landscape, direct/indirect competitor matrix, supplier/buyer power, TAM/SAM/SOM estimates...",
-  "marketing_sales_strategy": "ICP persona definitions, customer acquisition pipeline, go-to-market channels, branding taglines...",
-  "operational_plan": "Execution milestones, critical partnerships, tech/security/privacy compliance checklist, legal requirements...",
-  "financial_plan": "Revenue channels, EXACT pricing tier names and numeric values, break-even assumptions, capital burn rate...",
-  "risk_register": [
-    "Risk 1: [Risk description] — Mitigation: [specific action]",
-    "Risk 2: [Risk description] — Mitigation: [specific action]",
-    "Risk 3: [Risk description] — Mitigation: [specific action]"
-  ]
-}}
-""",
-        },
-
-        # ── 3. SWOT Analysis ────────────────────────────────────────────────
+        # ── 2. SWOT Analysis ────────────────────────────────────────────────
         "SWOT Analysis": {
             "schema": SwotAnalysisSchema,
             "export_formats": ["docx", "pptx", "pdf"],
@@ -296,7 +300,7 @@ Target JSON Format — return ONLY this block wrapped in ```json ... ```:
 """,
         },
 
-        # ── 4. Financial Projection ─────────────────────────────────────────
+        # ── 3. Financial Projection ─────────────────────────────────────────
         "Financial Projection": {
             "schema": FinancialProjectionSchema,
             "export_formats": ["docx", "pdf"],
@@ -341,7 +345,7 @@ Target JSON Format — return ONLY this block wrapped in ```json ... ```:
 """,
         },
 
-        # ── 5. Investment Readiness Report ──────────────────────────────────
+        # ── 4. Investment Readiness Report ──────────────────────────────────
         "Investment Readiness Report": {
             "schema": InvestmentReadinessSchema,
             "export_formats": ["docx", "pptx", "pdf"],
@@ -389,6 +393,84 @@ Target JSON Format — return ONLY this block wrapped in ```json ... ```:
 }}
 """,
         },
+
+        # ── 5. Business Plan (last — heaviest report, 2-call split architecture) ──
+        # Positioned last so the 4 lighter reports always complete first even
+        # if Business Plan requires retry overhead. Input fields are capped
+        # (bp_* variables above) to keep input token count ≤ ~4500 tokens.
+        # max_tokens=8192 gives the 6-field output (5 prose + risk list)
+        # genuine headroom; previously 4096 was marginal for this schema.
+        # Generation is handled by _generate_business_plan_split() via the
+        # special-case branch in _generate_report_json().
+        "Business Plan": {
+            "schema": BusinessPlanSchema,
+            "export_formats": ["docx", "pdf"],
+            "max_tokens": 8192,
+            "export_mapping": {
+                "company_description":    "Company Description & Mission",
+                "market_analysis":        "Market Analysis & Landscape",
+                "marketing_sales_strategy": "Marketing & Sales Strategy",
+                "operational_plan":       "Operational & Compliance Roadmap",
+                "financial_plan":         "Financial Plan & Pricing Structures",
+                "risk_register":          "Risk Register & Mitigations",
+            },
+            # The system_prompt below is used as the FALLBACK single-call
+            # path only (if _generate_business_plan_split somehow cannot be
+            # called). Normal generation goes through the split-call helper.
+            "system_prompt": f"""You are the Report Generator for AI Venture Studio.
+Generate a comprehensive Business Plan JSON suitable for bank or investor submission.
+
+BUSINESS IDEA:
+{idea}
+
+STRATEGY ASSESSMENT (excerpt):
+{bp_strategy}
+
+FINANCE ASSESSMENT (excerpt):
+{bp_finance}
+
+MARKETING PLAN (excerpt):
+{bp_marketing}
+
+RISK ASSESSMENT (excerpt):
+{bp_risk}
+
+COUNCIL DEBATE NOTES (excerpt):
+{bp_council}
+
+REVIEWER NOTES (excerpt):
+{bp_reviewer}
+
+CRITIC NOTES (excerpt):
+{bp_critic}
+
+Target JSON Format — return ONLY this block wrapped in ```json ... ```:
+{{
+  "company_description": "Strategic vision, mission statement, problem-solution alignment, and venture model details...",
+  "market_analysis": "Industry landscape, direct/indirect competitor matrix, supplier/buyer power, TAM/SAM/SOM estimates...",
+  "marketing_sales_strategy": "ICP persona definitions, customer acquisition pipeline, go-to-market channels, branding taglines...",
+  "operational_plan": "Execution milestones, critical partnerships, tech/security/privacy compliance checklist, legal requirements...",
+  "financial_plan": "Revenue channels, EXACT pricing tier names and numeric values, break-even assumptions, capital burn rate...",
+  "risk_register": [
+    "Risk 1: [Risk description] — Mitigation: [specific action]",
+    "Risk 2: [Risk description] — Mitigation: [specific action]",
+    "Risk 3: [Risk description] — Mitigation: [specific action]"
+  ]
+}}
+""",
+            # Store capped context in registry so split-call helper can read it
+            # without re-interpolating the full context dict.
+            "_bp_context": {
+                "idea": idea,
+                "strategy": bp_strategy,
+                "finance": bp_finance,
+                "marketing": bp_marketing,
+                "risk": bp_risk,
+                "council_str": bp_council,
+                "reviewer": bp_reviewer,
+                "critic": bp_critic,
+            },
+        },
     }
 
 
@@ -407,29 +489,263 @@ Malformed input:
 """
 
 
+# ---------------------------------------------------------------------------
+# Business Plan: 2-call split-architecture generator
+# ---------------------------------------------------------------------------
+
+def _generate_business_plan_split(
+    bp_ctx: dict,
+    project_id: str,
+    max_tokens: int = 4096,
+    preferred: str = "gemini",
+    label_suffix: str = "",
+) -> dict:
+    """
+    Generates the Business Plan in two sequential LLM calls instead of one.
+
+    Splitting the 6-field Business Plan schema into two focused calls:
+      Call A — Company & Market  : company_description + market_analysis
+      Call B — Ops & Finance     : marketing_sales_strategy + operational_plan
+                                   + financial_plan + risk_register
+
+    Each call uses at most half of the input context and targets 3 or fewer
+    output fields, keeping both input and output token budgets well within
+    the 4096-token limit per call.
+
+    Args:
+        bp_ctx: Capped context dict with keys: idea, strategy, finance,
+                marketing, risk, council_str, reviewer, critic.
+        project_id: Pipeline project ID (for agent_logs foreign key).
+        max_tokens: Per-call output token budget (default 4096).
+        preferred: Provider preference passed to call_llm.
+        label_suffix: Appended to agent_name in logs (e.g. " [Reduced]").
+
+    Returns:
+        Merged dict with all 6 BusinessPlanSchema fields.
+
+    Raises:
+        ValueError / json.JSONDecodeError: if either call fails after its
+        own repair retry — caller must handle.
+    """
+    idea        = bp_ctx["idea"]
+    strategy    = bp_ctx["strategy"]
+    finance     = bp_ctx["finance"]
+    marketing   = bp_ctx["marketing"]
+    risk        = bp_ctx["risk"]
+    council_str = bp_ctx["council_str"]
+    reviewer    = bp_ctx["reviewer"]
+    critic      = bp_ctx["critic"]
+
+    # ── Call A: Company Description + Market Analysis ─────────────────────
+    prompt_a = f"""You are the Report Generator for AI Venture Studio.
+Generate PART 1 of a Business Plan JSON covering company description and market analysis.
+Return ONLY a JSON block with exactly these two fields.
+
+BUSINESS IDEA:
+{idea}
+
+STRATEGY ASSESSMENT:
+{strategy}
+
+FINANCE ASSESSMENT (for context):
+{finance[:1200]}
+
+COUNCIL DEBATE NOTES:
+{council_str}
+
+Target JSON Format — return ONLY this block wrapped in ```json ... ```:
+{{
+  "company_description": "Strategic vision, mission statement, problem-solution alignment, and venture model details...",
+  "market_analysis": "Industry landscape, direct/indirect competitor matrix, supplier/buyer power, TAM/SAM/SOM estimates..."
+}}
+"""
+
+    raw_a = call_llm(
+        prompt="Generate Business Plan Part 1 (Company & Market) as instructed.",
+        system_prompt=prompt_a,
+        preferred_provider=preferred,
+        project_id=project_id,
+        agent_name=f"Business Plan Generator [Part A]{label_suffix}",
+        max_tokens=max_tokens,
+    )
+    if isinstance(raw_a, dict) and raw_a.get("status") == "failed":
+        raise ValueError(f"Business Plan Part A LLM call failed: {raw_a['error']}")
+
+    cleaned_a = extract_json_block(raw_a)
+    try:
+        part_a = json.loads(cleaned_a)
+    except json.JSONDecodeError as err_a:
+        print(f"[Business Plan Split] Part A JSON error: {err_a}. Attempting repair...")
+        repair_a = call_llm(
+            prompt=JSON_REPAIR_PROMPT.format(malformed=cleaned_a[:6000]),
+            system_prompt="You are a JSON repair assistant. Return only valid JSON wrapped in ```json ... ``` fences.",
+            preferred_provider=preferred,
+            project_id=project_id,
+            agent_name=f"Business Plan Generator [Part A Repair]{label_suffix}",
+            max_tokens=max_tokens,
+        )
+        if isinstance(repair_a, dict) and repair_a.get("status") == "failed":
+            raise ValueError(f"Business Plan Part A repair call failed: {repair_a['error']}")
+        part_a = json.loads(extract_json_block(repair_a))
+
+    # ── Call B: Ops, Finance & Risk ───────────────────────────────────────
+    prompt_b = f"""You are the Report Generator for AI Venture Studio.
+Generate PART 2 of a Business Plan JSON covering go-to-market strategy,
+operational plan, financial plan, and risk register.
+Return ONLY a JSON block with exactly these four fields.
+
+BUSINESS IDEA:
+{idea}
+
+FINANCE ASSESSMENT (primary source):
+{finance}
+
+MARKETING PLAN:
+{marketing}
+
+RISK ASSESSMENT:
+{risk}
+
+REVIEWER NOTES:
+{reviewer}
+
+CRITIC NOTES:
+{critic}
+
+Target JSON Format — return ONLY this block wrapped in ```json ... ```:
+{{
+  "marketing_sales_strategy": "ICP persona definitions, customer acquisition pipeline, go-to-market channels, branding taglines...",
+  "operational_plan": "Execution milestones, critical partnerships, tech/security/privacy compliance checklist, legal requirements...",
+  "financial_plan": "Revenue channels, EXACT pricing tier names and numeric values, break-even assumptions, capital burn rate...",
+  "risk_register": [
+    "Risk 1: [Risk description] — Mitigation: [specific action]",
+    "Risk 2: [Risk description] — Mitigation: [specific action]",
+    "Risk 3: [Risk description] — Mitigation: [specific action]"
+  ]
+}}
+"""
+
+    raw_b = call_llm(
+        prompt="Generate Business Plan Part 2 (Ops, Finance & Risk) as instructed.",
+        system_prompt=prompt_b,
+        preferred_provider=preferred,
+        project_id=project_id,
+        agent_name=f"Business Plan Generator [Part B]{label_suffix}",
+        max_tokens=max_tokens,
+    )
+    if isinstance(raw_b, dict) and raw_b.get("status") == "failed":
+        raise ValueError(f"Business Plan Part B LLM call failed: {raw_b['error']}")
+
+    cleaned_b = extract_json_block(raw_b)
+    try:
+        part_b = json.loads(cleaned_b)
+    except json.JSONDecodeError as err_b:
+        print(f"[Business Plan Split] Part B JSON error: {err_b}. Attempting repair...")
+        repair_b = call_llm(
+            prompt=JSON_REPAIR_PROMPT.format(malformed=cleaned_b[:6000]),
+            system_prompt="You are a JSON repair assistant. Return only valid JSON wrapped in ```json ... ``` fences.",
+            preferred_provider=preferred,
+            project_id=project_id,
+            agent_name=f"Business Plan Generator [Part B Repair]{label_suffix}",
+            max_tokens=max_tokens,
+        )
+        if isinstance(repair_b, dict) and repair_b.get("status") == "failed":
+            raise ValueError(f"Business Plan Part B repair call failed: {repair_b['error']}")
+        part_b = json.loads(extract_json_block(repair_b))
+
+    # ── Merge A + B into full Business Plan dict ──────────────────────────
+    return {**part_a, **part_b}
+
+
+# ---------------------------------------------------------------------------
+# JSON generation helper — routes Business Plan through split-call path
+# ---------------------------------------------------------------------------
+
 def _generate_report_json(
     report_type: str,
     config: dict,
     project_id: str,
 ) -> dict:
     """
-    Calls the LLM to generate one report's JSON, with a one-shot JSON repair retry.
+    Calls the LLM to generate one report's JSON.
 
-    Strategy:
-    1. First call uses the full system_prompt with the report type's max_tokens.
-    2. On JSONDecodeError (truncation or bad escape), re-prompts the LLM with the
-       malformed output and a repair instruction — one retry only.
-    3. On second failure, raises so the caller's per-report try/except captures it.
+    For Business Plan specifically, this uses a 2-call split architecture
+    (_generate_business_plan_split) instead of a single large call:
+      - Reduces both input and output token pressure per call.
+      - Each sub-call has its own JSON repair retry.
+      - On total failure of the split path, retries once with summarized
+        (800-char) context before giving up — the "retry-with-repair" path
+        described in the task spec.
+
+    For all other report types:
+      1. First call uses the full system_prompt with the report's max_tokens.
+      2. On JSONDecodeError, re-prompts with the malformed output and a repair
+         instruction — one repair retry only.
+      3. On second failure, raises so the caller's per-report try/except captures it.
 
     Args:
-        config: Registry entry dict (must contain system_prompt; optionally max_tokens).
+        config: Registry entry dict (must contain system_prompt; optionally
+                max_tokens, preferred_provider, _bp_context).
     Returns:
         Parsed report_content dict ready for schema coercion and Pydantic validation.
     Raises:
-        ValueError / json.JSONDecodeError: on total failure (both attempts).
+        ValueError / json.JSONDecodeError: on total failure.
     """
     max_tokens = config.get("max_tokens", 1024)
     preferred   = config.get("preferred_provider", "gemini")
+
+    # ── Business Plan: split-call path ───────────────────────────────────
+    if report_type == "Business Plan":
+        bp_ctx = config.get("_bp_context")
+        if not bp_ctx:
+            # Defensive fallback: should never happen if registry is correct
+            raise ValueError(
+                "Business Plan registry entry missing '_bp_context'. "
+                "This is a configuration error in _build_registry()."
+            )
+
+        # ── Split-call attempt ────────────────────────────────────────────
+        try:
+            print("[Report Generator] 'Business Plan' — using 2-call split architecture.")
+            return _generate_business_plan_split(
+                bp_ctx=bp_ctx,
+                project_id=project_id,
+                max_tokens=max_tokens // 2,  # Each call gets half the budget
+                preferred=preferred,
+            )
+        except Exception as split_err:
+            print(
+                f"[Report Generator] 'Business Plan' — split-call path failed: {split_err}. "
+                f"Retrying with summarized (800-char) context..."
+            )
+
+        # ── Context-reduced fallback retry ────────────────────────────────
+        # Truncate every field to 800 chars — worst-case the report will be
+        # less detailed, but it will complete rather than fail entirely.
+        reduced_ctx = {
+            "idea":        bp_ctx["idea"][:800],
+            "strategy":    bp_ctx["strategy"][:800],
+            "finance":     bp_ctx["finance"][:800],
+            "marketing":   bp_ctx["marketing"][:800],
+            "risk":        bp_ctx["risk"][:800],
+            "council_str": bp_ctx["council_str"][:800],
+            "reviewer":    bp_ctx["reviewer"][:400],
+            "critic":      bp_ctx["critic"][:400],
+        }
+        print("[Report Generator] 'Business Plan' — reduced-context retry: "
+              f"~{_estimate_tokens(''.join(reduced_ctx.values())):,} input tokens.")
+        # Each sub-call on reduced context gets 2048 tokens — plenty for
+        # shorter input → shorter expected output.
+        return _generate_business_plan_split(
+            bp_ctx=reduced_ctx,
+            project_id=project_id,
+            max_tokens=2048,
+            preferred=preferred,
+            label_suffix=" [Reduced]",
+        )
+        # If this also raises, it propagates to the caller's except clause.
+
+    # ── All other report types: standard single-call path ─────────────────
 
     # ── Attempt 1: normal generation ─────────────────────────────────────
     raw_text = call_llm(
@@ -533,6 +849,9 @@ def report_generator_node(state: AgentState) -> Dict[str, Any]:
     # ── Build the registry with interpolated prompts ───────────────────────
     registry = _build_registry(context)
 
+    # ── Log estimated input token counts (diagnostic) ─────────────────────
+    _log_prompt_token_estimates(context)
+
     generated_reports: Dict[str, dict] = {}
     success_count = 0
     failure_count = 0
@@ -633,12 +952,12 @@ def _upsert_report(
         if existing.data:
             report_id = existing.data[0]["id"]
             supabase.table("reports").update(record).eq("id", report_id).execute()
-            print(f"  ↳ Updated existing record for '{report_type}'.")
+            print(f"  >> Updated existing record for '{report_type}'.")
         else:
             supabase.table("reports").insert(record).execute()
-            print(f"  ↳ Created new record for '{report_type}'.")
+            print(f"  >> Created new record for '{report_type}'.")
     except Exception as db_err:
-        print(f"  ↳ Supabase write warning for '{report_type}': {str(db_err)}")
+        print(f"  >> Supabase write warning for '{report_type}': {str(db_err)}")
 
 
 def _record_pipeline_abort(supabase, project_id: str, abort_reason: str, scores: dict) -> None:
@@ -667,13 +986,13 @@ def _build_final_report_text(
     registry: dict,
 ) -> str:
     """Builds a human-readable Markdown summary of all generated reports."""
-    lines = [f"# AI Venture Studio — Reports Suite\n**Project:** {project_id}\n"]
+    lines = [f"# AI Venture Studio - Reports Suite\n**Project:** {project_id}\n"]
 
     for report_type, content in generated_reports.items():
         lines.append(f"\n## {report_type}")
 
         if "error" in content:
-            lines.append(f"> ⚠️ {content['error']}\n")
+            lines.append(f"> [FAILED] {content['error']}\n")
             continue
 
         # Use human-readable section labels from export_mapping where available

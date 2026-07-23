@@ -3,9 +3,14 @@ import httpx
 from typing import Dict, Any, Union
 from app.core.config import settings
 
-def call_gemini(prompt: str, system_prompt: str = None) -> str:
+def call_gemini(prompt: str, system_prompt: str = None, max_tokens: int = 2048) -> str:
     """
     Calls the Gemini API (gemini-3.5-flash) with built-in 429 rate limit backoff.
+
+    Args:
+        max_tokens: Maximum output tokens for the completion. Passed as
+                    generationConfig.maxOutputTokens in the Gemini REST payload.
+                    Default 2048. Long-form reports (Business Plan) should pass 8192.
     """
     # Pace requests to avoid API quota saturation (especially when called concurrently or sequentially)
     time.sleep(1.5)
@@ -19,7 +24,10 @@ def call_gemini(prompt: str, system_prompt: str = None) -> str:
         contents_part.append({"text": prompt})
         
     payload = {
-        "contents": [{"parts": contents_part}]
+        "contents": [{"parts": contents_part}],
+        "generationConfig": {
+            "maxOutputTokens": max_tokens,
+        },
     }
     
     max_retries = 3
@@ -129,16 +137,16 @@ def call_llm(
             primary_err = str(e)
             print(f"WARNING: NVIDIA NIM failed. Falling back to Gemini API. Error: {primary_err}")
         
-        # 2. Execute Gemini fallback
+        # 2. Execute Gemini fallback (pass max_tokens so long-form reports respect output budget)
         try:
-            return call_gemini(prompt, system_prompt)
+            return call_gemini(prompt, system_prompt, max_tokens=max_tokens)
         except Exception as e:
             fallback_err = str(e)
             print(f"ERROR: Gemini fallback also failed. Error: {fallback_err}")
     else:
-        # 1. Execute Gemini primary
+        # 1. Execute Gemini primary (pass max_tokens so long-form reports respect output budget)
         try:
-            return call_gemini(prompt, system_prompt)
+            return call_gemini(prompt, system_prompt, max_tokens=max_tokens)
         except Exception as e:
             primary_err = str(e)
             print(f"WARNING: Gemini API failed. Falling back to NVIDIA NIM. Error: {primary_err}")
