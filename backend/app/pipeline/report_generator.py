@@ -88,9 +88,30 @@ def _log_prompt_token_estimates(context: dict) -> None:
 def _coerce_schema_fields(report_content: dict, schema_class) -> dict:
     """
     Pre-validate/coerce schema fields before Pydantic validation.
+    - Key alias mapping: rename common LLM key variations to canonical schema fields.
     - str fields: convert nested dicts/lists to human-readable strings.
     - List[str] fields: ensure the value is a list of strings.
     """
+    # ── Key Alias Mapping ─────────────────────────────────────────────────
+    field_aliases = {
+        "marketing_sales_strategy": [
+            "marketing_strategy", "marketing_and_sales_strategy", "go_to_market_strategy",
+            "sales_strategy", "gtm_strategy", "marketing_sales", "marketing_and_sales"
+        ],
+        "company_description": ["company_overview", "company_description_and_mission", "company_details"],
+        "market_analysis": ["market_overview", "market_and_industry_analysis", "industry_analysis"],
+        "operational_plan": ["operations_plan", "operational_roadmap", "operations_and_compliance"],
+        "financial_plan": ["financial_projections", "financial_plan_and_pricing", "financials"],
+        "risk_register": ["risks", "risk_register_and_mitigations", "risk_mitigation"],
+    }
+    for canonical_field, aliases in field_aliases.items():
+        if canonical_field not in report_content or not report_content[canonical_field]:
+            for alias in aliases:
+                if alias in report_content and report_content[alias]:
+                    print(f"[Report Generator] Coercing key alias '{alias}' -> '{canonical_field}'")
+                    report_content[canonical_field] = report_content.pop(alias)
+                    break
+
     schema_fields = schema_class.model_fields
     for field_name, field_info in schema_fields.items():
         if field_name not in report_content:
@@ -539,7 +560,8 @@ def _generate_business_plan_split(
     # ── Call A: Company Description + Market Analysis ─────────────────────
     prompt_a = f"""You are the Report Generator for AI Venture Studio.
 Generate PART 1 of a Business Plan JSON covering company description and market analysis.
-Return ONLY a JSON block with exactly these two fields.
+CRITICAL: Return ONLY a JSON block containing EXACTLY both of these two required fields:
+"company_description" and "market_analysis".
 
 BUSINESS IDEA:
 {idea}
@@ -588,11 +610,12 @@ Target JSON Format — return ONLY this block wrapped in ```json ... ```:
             raise ValueError(f"Business Plan Part A repair call failed: {repair_a['error']}")
         part_a = json.loads(extract_json_block(repair_a))
 
-    # ── Call B: Ops, Finance & Risk ───────────────────────────────────────
+    # ── Call B: Marketing, Ops, Finance & Risk ───────────────────────────
     prompt_b = f"""You are the Report Generator for AI Venture Studio.
-Generate PART 2 of a Business Plan JSON covering go-to-market strategy,
+Generate PART 2 of a Business Plan JSON covering marketing/sales strategy,
 operational plan, financial plan, and risk register.
-Return ONLY a JSON block with exactly these four fields.
+CRITICAL: Return ONLY a JSON block containing EXACTLY all four of these required fields:
+"marketing_sales_strategy", "operational_plan", "financial_plan", and "risk_register".
 
 BUSINESS IDEA:
 {idea}
@@ -626,7 +649,7 @@ Target JSON Format — return ONLY this block wrapped in ```json ... ```:
 """
 
     raw_b = call_llm(
-        prompt="Generate Business Plan Part 2 (Ops, Finance & Risk) as instructed.",
+        prompt="Generate Business Plan Part 2 (Marketing & Sales, Ops, Finance & Risk) as instructed.",
         system_prompt=prompt_b,
         preferred_provider=preferred,
         project_id=project_id,
@@ -654,7 +677,15 @@ Target JSON Format — return ONLY this block wrapped in ```json ... ```:
         part_b = json.loads(extract_json_block(repair_b))
 
     # ── Merge A + B into full Business Plan dict ──────────────────────────
-    return {**part_a, **part_b}
+    part_a_clean = {k: v for k, v in part_a.items() if not k.startswith("_")}
+    part_b_clean = {k: v for k, v in part_b.items() if not k.startswith("_")}
+    
+    # Key union of both calls
+    merged = {**part_a_clean, **part_b_clean}
+    # Attach raw parts for diagnostic checkpoint logging if validation fails downstream
+    merged["_raw_part_a"] = part_a_clean
+    merged["_raw_part_b"] = part_b_clean
+    return merged
 
 
 # ---------------------------------------------------------------------------
@@ -871,16 +902,35 @@ def report_generator_node(state: AgentState) -> Dict[str, Any]:
             # Generate JSON via helper (includes JSON repair retry on truncation)
             report_content = _generate_report_json(report_type, config, project_id)
 
-            # Coerce field types to match schema before Pydantic validation
+            # Coerce field types and key aliases to match schema before Pydantic validation
             report_content = _coerce_schema_fields(report_content, config["schema"])
 
-            # Validate against Pydantic schema
-            config["schema"].model_validate(report_content)
+            # Validate against Pydantic schema with diagnostic checkpoint on failure
+            try:
+                config["schema"].model_validate(report_content)
+            except Exception as val_err:
+                print(f"\n[Report Generator] ERROR: Schema validation checkpoint failed for '{report_type}'!")
+                if "_raw_part_a" in report_content or "_raw_part_b" in report_content:
+                    print("=== DIAGNOSTIC CHECKPOINT: Raw Split Call Outputs (Before Merge) ===")
+                    print(f"--- Part A Raw Keys: {list(report_content.get('_raw_part_a', {}).keys())} ---")
+                    print(json.dumps(report_content.get("_raw_part_a", {}), indent=2))
+                    print(f"--- Part B Raw Keys: {list(report_content.get('_raw_part_b', {}).keys())} ---")
+                    print(json.dumps(report_content.get("_raw_part_b", {}), indent=2))
+                    merged_keys = [k for k in report_content.keys() if not k.startswith("_")]
+                    print(f"--- Merged Keys: {merged_keys} ---")
+                else:
+                    print(f"--- Raw Response Keys: {list(k for k in report_content.keys() if not k.startswith('_'))} ---")
+                    print(json.dumps({k: v for k, v in report_content.items() if not k.startswith("_")}, indent=2))
+                print("===================================================================\n")
+                raise val_err
+
+            # Clean up internal debug keys before DB upsert
+            report_content_clean = {k: v for k, v in report_content.items() if not k.startswith("_")}
 
             # Upsert to Supabase reports table
-            _upsert_report(supabase, project_id, report_type, report_content, scores, "Completed")
+            _upsert_report(supabase, project_id, report_type, report_content_clean, scores, "Completed")
 
-            generated_reports[report_type] = report_content
+            generated_reports[report_type] = report_content_clean
             success_count += 1
             print(f"[Report Generator] '{report_type}' — OK")
 
