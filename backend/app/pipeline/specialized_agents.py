@@ -152,6 +152,7 @@ def execute_agent_logic(
         }
     
     # 4. Log to Supabase agent_logs
+    agent_key = agent_name.lower().replace(" agent", "")
     try:
         supabase = get_supabase_client()
         supabase.table("agent_logs").insert({
@@ -164,7 +165,8 @@ def execute_agent_logic(
                 "has_rag_context": len(context_chunks) > 0
             },
             "output_data": {
-                "assessment": output[:1000]
+                "assessment": output,
+                agent_key: output
             }
         }).execute()
         print(f"Logged {agent_name} execution to Supabase.")

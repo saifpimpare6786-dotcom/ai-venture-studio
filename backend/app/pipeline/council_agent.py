@@ -142,6 +142,7 @@ def llm_council_node(state: AgentState) -> Dict[str, Any]:
                 "feedback_count": len(feedback_list),
                 "success_count": success_count,
                 "failure_count": failure_count,
+                "council_feedback": feedback_list,
                 "feedback_preview": "\n\n".join(feedback_list)[:1000]
             }
         }).execute()

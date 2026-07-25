@@ -65,7 +65,7 @@ def planning_agent_node(state: AgentState) -> Dict[str, Any]:
                 "has_rag_context": len(rag_context) > 0
             },
             "output_data": {
-                "plan": plan[:1000]
+                "plan": plan
             }
         }).execute()
         print("Logged Planning Agent execution to Supabase.")

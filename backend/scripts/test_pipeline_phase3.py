@@ -73,6 +73,9 @@ from app.schemas.report import ExecutiveSummarySchema
 from pydantic import ValidationError
 
 
+import argparse
+
+
 # ---------------------------------------------------------------------------
 # Terminal-safe printer (handles Windows CP1252 stdout encoding)
 # ---------------------------------------------------------------------------
@@ -99,20 +102,136 @@ def subsection(title: str):
     safe_print(f"\n--- {title} ---")
 
 
+def fetch_cached_agent_outputs(supabase, project_id: str) -> dict:
+    """
+    Attempts to fetch the latest completed output from Supabase agent_logs for all 12 prior nodes:
+    Planning Agent, Orchestrator Agent, Research Agent, Finance Agent, Strategy Agent,
+    Marketing Agent, Risk Agent, Council Agent (or LLM Council), Reviewer Agent,
+    Critic Agent, Business Rules Engine, Analytics & Scoring Engine.
+
+    Returns a populated state dict if ALL 12 prior node outputs exist and are valid,
+    or None if any node output is missing or incomplete.
+    """
+    if not supabase:
+        return None
+
+    try:
+        res = (
+            supabase.table("agent_logs")
+            .select("agent_name, status, input_data, output_data, timestamp")
+            .eq("project_id", project_id)
+            .order("timestamp", desc=True)
+            .execute()
+        )
+        if not res.data:
+            return None
+
+        # Build a mapping of agent_name -> latest output_data
+        latest_logs = {}
+        for row in res.data:
+            agent = row.get("agent_name")
+            status = row.get("status", "")
+            if status in ("completed", "completed (cached)", "warning") and agent not in latest_logs:
+                latest_logs[agent] = row.get("output_data") or {}
+
+        required_agents = [
+            "Planning Agent",
+            "Orchestrator Agent",
+            "Research Agent",
+            "Finance Agent",
+            "Strategy Agent",
+            "Marketing Agent",
+            "Risk Agent",
+            "Reviewer Agent",
+            "Critic Agent",
+            "Business Rules Engine",
+            "Analytics & Scoring Engine",
+        ]
+        council_log = latest_logs.get("Council Agent") or latest_logs.get("LLM Council")
+
+        missing = [ag for ag in required_agents if ag not in latest_logs]
+        if missing or not council_log:
+            safe_print(f"[Cache Lookup] Cache miss — missing completed logs for: {missing or ['Council Agent']}")
+            return None
+
+        plan = latest_logs["Planning Agent"].get("plan", "")
+        directives = latest_logs["Orchestrator Agent"].get("directives") or latest_logs["Orchestrator Agent"].get("orchestration", "")
+        research_results = latest_logs["Research Agent"].get("research_results") or latest_logs["Research Agent"].get("research_summary", "")
+
+        fin_out = latest_logs["Finance Agent"].get("finance") or latest_logs["Finance Agent"].get("assessment", "")
+        strat_out = latest_logs["Strategy Agent"].get("strategy") or latest_logs["Strategy Agent"].get("assessment", "")
+        mkt_out = latest_logs["Marketing Agent"].get("marketing") or latest_logs["Marketing Agent"].get("assessment", "")
+        risk_out = latest_logs["Risk Agent"].get("risk") or latest_logs["Risk Agent"].get("assessment", "")
+
+        council_feedback = council_log.get("council_feedback", [])
+        if not council_feedback and council_log.get("feedback_preview"):
+            council_feedback = [council_log["feedback_preview"]]
+
+        reviewer_notes = latest_logs["Reviewer Agent"].get("reviewer_notes", "")
+        critic_notes = latest_logs["Critic Agent"].get("critic_notes", "")
+
+        rules_res = latest_logs["Business Rules Engine"].get("rules_validation_result") or latest_logs["Business Rules Engine"].get("validation_result", {})
+        scores = latest_logs["Analytics & Scoring Engine"].get("scores", {})
+
+        # Ensure essential outputs are not empty
+        if not (plan and directives and research_results and fin_out and strat_out and mkt_out and risk_out and reviewer_notes and critic_notes and rules_res and scores):
+            safe_print("[Cache Lookup] Cache miss — one or more cached output fields are empty.")
+            return None
+
+        return {
+            "plan": plan,
+            "directives": directives,
+            "research_results": research_results,
+            "specialized_outputs": {
+                "finance": fin_out,
+                "strategy": strat_out,
+                "marketing": mkt_out,
+                "risk": risk_out,
+            },
+            "council_feedback": council_feedback if isinstance(council_feedback, list) else [str(council_feedback)],
+            "reviewer_notes": reviewer_notes,
+            "critic_notes": critic_notes,
+            "rules_validation_result": rules_res,
+            "scores": scores,
+        }
+
+    except Exception as e:
+        safe_print(f"[Cache Lookup Warning] Error querying agent_logs: {e}")
+        return None
+
+
 # ---------------------------------------------------------------------------
 # Main test runner
 # ---------------------------------------------------------------------------
 def run_phase3_test():
+    parser = argparse.ArgumentParser(description="AI Venture Studio — Pipeline Phase 3 Test (incl. Report Generator)")
+    parser.add_argument(
+        "--force-refresh",
+        action="store_true",
+        help="Bypass cached node outputs in Supabase and re-run all pipeline steps clean",
+    )
+    parser.add_argument(
+        "--project-id",
+        type=str,
+        default=None,
+        help="Specific database project ID to test",
+    )
+    args, _ = parser.parse_known_args()
+
     section("AI Venture Studio — Pipeline Phase 3 Test (incl. Report Generator)")
 
     # ── Resolve a live project ID from Supabase (or fall back to mock UUID) ──
-    project_id = "00000000-0000-0000-0000-000000000000"
+    project_id = args.project_id or "00000000-0000-0000-0000-000000000000"
+    supabase = None
     try:
         supabase = get_supabase_client()
-        res = supabase.table("projects").select("id").limit(1).execute()
-        if res.data:
-            project_id = res.data[0]["id"]
-            safe_print(f"Dynamically resolved database project ID: {project_id}")
+        if not args.project_id:
+            res = supabase.table("projects").select("id").limit(1).execute()
+            if res.data:
+                project_id = res.data[0]["id"]
+                safe_print(f"Dynamically resolved database project ID: {project_id}")
+        else:
+            safe_print(f"Using CLI specified project ID: {project_id}")
     except Exception as db_err:
         safe_print(f"Database lookup warning (using mock project ID): {db_err}")
 
@@ -148,138 +267,205 @@ def run_phase3_test():
         "rules_validation_result": {},
         "scores": {},
         "final_report": "",
-        "force_refresh": True,
+        "force_refresh": args.force_refresh,
     }
 
     safe_print(f"\nBusiness Idea: {mock_state['business_idea_input']}")
     safe_print(f"RAG Context items: {len(mock_state['rag_context'])}")
+    safe_print(f"Force Refresh: {args.force_refresh}")
 
     # ─────────────────────────────────────────────────────────────────────────
-    # Steps 1–12: identical to phase 2 (reproduced here so this script is
-    # fully self-contained and runnable without phase 2 being imported)
+    # Steps 1–12: Check Supabase agent_logs cache before running LLMs
     # ─────────────────────────────────────────────────────────────────────────
+    cached_state = None
+    if not args.force_refresh and supabase:
+        safe_print("\nChecking Supabase agent_logs for cached prior node outputs...")
+        cached_state = fetch_cached_agent_outputs(supabase, project_id)
 
-    # Step 1 — Planning Agent
-    subsection("Step 1 — Planning Agent")
-    plan_out = planning_agent_node(mock_state)
-    mock_state["plan"] = plan_out.get("plan", "")
-    safe_print("[Plan preview]:")
-    safe_print(mock_state["plan"][:600] + ("..." if len(mock_state["plan"]) > 600 else ""))
+    if cached_state and not args.force_refresh:
+        section("CACHE HIT — Reusing Logged Node Outputs from Supabase (Steps 1–12)")
+        mock_state.update(cached_state)
 
-    # Step 2 — Orchestrator Agent
-    subsection("Step 2 — Orchestrator Agent")
-    orch_out = orchestrator_agent_node(mock_state)
-    mock_state["directives"] = orch_out.get("directives", "")
-    safe_print("[Directives preview]:")
-    safe_print(mock_state["directives"][:600] + ("..." if len(mock_state["directives"]) > 600 else ""))
+        subsection("Step 1 — Planning Agent (Cached)")
+        safe_print("[Plan preview]:")
+        safe_print(mock_state["plan"][:600] + ("..." if len(mock_state["plan"]) > 600 else ""))
 
-    # Step 3 — Research Agent
-    subsection("Step 3 — Research Agent")
-    research_out = research_agent_node(mock_state)
-    mock_state["research_results"] = research_out.get("research_results", "")
-    safe_print("[Research results preview]:")
-    safe_print(mock_state["research_results"][:600] + ("..." if len(mock_state["research_results"]) > 600 else ""))
+        subsection("Step 2 — Orchestrator Agent (Cached)")
+        safe_print("[Directives preview]:")
+        safe_print(mock_state["directives"][:600] + ("..." if len(mock_state["directives"]) > 600 else ""))
 
-    # Step 4 — Finance Agent (must run before Strategy AND Marketing)
-    subsection("Step 4 — Finance Agent")
-    fin_out = finance_agent_node(mock_state)
-    mock_state["specialized_outputs"].update(fin_out.get("specialized_outputs", {}))
-    if fin_out.get("failed_agents"):
-        mock_state["failed_agents"].extend(fin_out["failed_agents"])
-    safe_print("[Finance Agent preview]:")
-    safe_print(mock_state["specialized_outputs"].get("finance", "")[:600] + "...")
+        subsection("Step 3 — Research Agent (Cached)")
+        safe_print("[Research results preview]:")
+        safe_print(mock_state["research_results"][:600] + ("..." if len(mock_state["research_results"]) > 600 else ""))
 
-    # Step 5 — Strategy Agent  [reads Finance pricing from state — matches graph topology]
-    subsection("Step 5 — Strategy Agent  [reads Finance pricing from state]")
-    strat_out = strategy_agent_node(mock_state)
-    mock_state["specialized_outputs"].update(strat_out.get("specialized_outputs", {}))
-    if strat_out.get("failed_agents"):
-        mock_state["failed_agents"].extend(strat_out["failed_agents"])
-    safe_print("[Strategy Agent preview]:")
-    safe_print(mock_state["specialized_outputs"].get("strategy", "")[:600] + "...")
+        subsection("Step 4 — Finance Agent (Cached)")
+        safe_print("[Finance Agent preview]:")
+        safe_print(mock_state["specialized_outputs"].get("finance", "")[:600] + "...")
 
-    # Step 6 — Marketing Agent  [reads Finance pricing from state, parallel with Strategy in graph]
-    subsection("Step 6 — Marketing Agent  [reads Finance pricing from state]")
-    mkt_out = marketing_agent_node(mock_state)
-    mock_state["specialized_outputs"].update(mkt_out.get("specialized_outputs", {}))
-    if mkt_out.get("failed_agents"):
-        mock_state["failed_agents"].extend(mkt_out["failed_agents"])
-    safe_print("[Marketing Agent preview]:")
-    safe_print(mock_state["specialized_outputs"].get("marketing", "")[:600] + "...")
+        subsection("Step 5 — Strategy Agent (Cached)")
+        safe_print("[Strategy Agent preview]:")
+        safe_print(mock_state["specialized_outputs"].get("strategy", "")[:600] + "...")
 
-    # Step 7 — Risk Agent  [runs in parallel with Finance in the graph; sequential here for simplicity]
-    subsection("Step 7 — Risk Agent")
-    risk_out = risk_agent_node(mock_state)
-    mock_state["specialized_outputs"].update(risk_out.get("specialized_outputs", {}))
-    if risk_out.get("failed_agents"):
-        mock_state["failed_agents"].extend(risk_out["failed_agents"])
-    safe_print("[Risk Agent preview]:")
-    safe_print(mock_state["specialized_outputs"].get("risk", "")[:600] + "...")
+        subsection("Step 6 — Marketing Agent (Cached)")
+        safe_print("[Marketing Agent preview]:")
+        safe_print(mock_state["specialized_outputs"].get("marketing", "")[:600] + "...")
 
-    # Check gate 1 — if any specialized agent failed, abort now
-    if mock_state["failed_agents"]:
-        safe_print(
-            f"\n[GATE 1] Pipeline aborted — failed specialized agents: "
-            f"{mock_state['failed_agents']}"
-        )
-        safe_print("Skipping remaining steps.")
-        return
+        subsection("Step 7 — Risk Agent (Cached)")
+        safe_print("[Risk Agent preview]:")
+        safe_print(mock_state["specialized_outputs"].get("risk", "")[:600] + "...")
 
-    # Step 8 — LLM Council
-    subsection("Step 8 — LLM Council")
-    council_out = llm_council_node(mock_state)
-    mock_state["council_feedback"] = council_out.get("council_feedback", [])
-    safe_print(f"[Council feedback count: {len(mock_state['council_feedback'])}]")
-    for i, fb in enumerate(mock_state["council_feedback"], 1):
-        safe_print(f"  Feedback [{i}] preview: {str(fb)[:300]}...")
+        subsection("Step 8 — LLM Council (Cached)")
+        safe_print(f"[Council feedback count: {len(mock_state['council_feedback'])}]")
+        for i, fb in enumerate(mock_state["council_feedback"], 1):
+            safe_print(f"  Feedback [{i}] preview: {str(fb)[:300]}...")
 
-    # Step 9 — Reviewer Agent
-    subsection("Step 9 — Reviewer Agent")
-    rev_out = reviewer_agent_node(mock_state)
-    mock_state["reviewer_notes"] = rev_out.get("reviewer_notes", "")
-    if rev_out.get("failed_agents"):
-        mock_state["failed_agents"].extend(rev_out["failed_agents"])
-    safe_print("[Reviewer notes preview]:")
-    safe_print(mock_state["reviewer_notes"][:800] + "...")
+        subsection("Step 9 — Reviewer Agent (Cached)")
+        safe_print("[Reviewer notes preview]:")
+        safe_print(mock_state["reviewer_notes"][:800] + "...")
 
-    # Step 10 — Critic Agent
-    subsection("Step 10 — Critic Agent")
-    critic_out = critic_agent_node(mock_state)
-    mock_state["critic_notes"] = critic_out.get("critic_notes", "")
-    if critic_out.get("failed_agents"):
-        mock_state["failed_agents"].extend(critic_out["failed_agents"])
-    safe_print("[Critic notes preview]:")
-    safe_print(mock_state["critic_notes"][:800] + "...")
+        subsection("Step 10 — Critic Agent (Cached)")
+        safe_print("[Critic notes preview]:")
+        safe_print(mock_state["critic_notes"][:800] + "...")
 
-    # Check gate 2 — Reviewer or Critic failures
-    post_council_failures = [
-        f for f in mock_state["failed_agents"] if f in ("reviewer", "critic")
-    ]
-    if post_council_failures:
-        safe_print(
-            f"\n[GATE 2] Pipeline aborted — failed post-council agents: "
-            f"{post_council_failures}"
-        )
-        safe_print("Skipping Report Generator.")
-        return
+        subsection("Step 11 — Business Rules Engine (Cached)")
+        is_valid = mock_state["rules_validation_result"].get("is_valid", False)
+        errors   = mock_state["rules_validation_result"].get("errors", [])
+        extracted = mock_state["rules_validation_result"].get("extracted_data", {})
+        safe_print(f"  is_valid  : {is_valid}")
+        safe_print(f"  errors    : {errors}")
+        safe_print(f"  extracted : {json.dumps(extracted, indent=4)}")
 
-    # Step 11 — Business Rules Engine
-    subsection("Step 11 — Business Rules Engine")
-    rules_out = business_rules_engine_node(mock_state)
-    mock_state["rules_validation_result"] = rules_out.get("rules_validation_result", {})
-    is_valid = mock_state["rules_validation_result"].get("is_valid", False)
-    errors   = mock_state["rules_validation_result"].get("errors", [])
-    extracted = mock_state["rules_validation_result"].get("extracted_data", {})
-    safe_print(f"  is_valid  : {is_valid}")
-    safe_print(f"  errors    : {errors}")
-    safe_print(f"  extracted : {json.dumps(extracted, indent=4)}")
+        subsection("Step 12 — Analytics & Scoring Engine (Cached)")
+        safe_print("[Scores]:")
+        safe_print(json.dumps(mock_state["scores"], indent=2))
 
-    # Step 12 — Analytics & Scoring Engine
-    subsection("Step 12 — Analytics & Scoring Engine")
-    scoring_out = analytics_scoring_node(mock_state)
-    mock_state["scores"] = scoring_out.get("scores", {})
-    safe_print("[Scores]:")
-    safe_print(json.dumps(mock_state["scores"], indent=2))
+    else:
+        if args.force_refresh:
+            safe_print("\n[FORCE REFRESH ACTIVE] Bypassing cache — executing all steps 1–12 fresh.")
+        else:
+            safe_print("\n[CACHE MISS] Running steps 1–12 fresh and logging to Supabase...")
+
+        # Step 1 — Planning Agent
+        subsection("Step 1 — Planning Agent")
+        plan_out = planning_agent_node(mock_state)
+        mock_state["plan"] = plan_out.get("plan", "")
+        safe_print("[Plan preview]:")
+        safe_print(mock_state["plan"][:600] + ("..." if len(mock_state["plan"]) > 600 else ""))
+
+        # Step 2 — Orchestrator Agent
+        subsection("Step 2 — Orchestrator Agent")
+        orch_out = orchestrator_agent_node(mock_state)
+        mock_state["directives"] = orch_out.get("directives", "")
+        safe_print("[Directives preview]:")
+        safe_print(mock_state["directives"][:600] + ("..." if len(mock_state["directives"]) > 600 else ""))
+
+        # Step 3 — Research Agent
+        subsection("Step 3 — Research Agent")
+        research_out = research_agent_node(mock_state)
+        mock_state["research_results"] = research_out.get("research_results", "")
+        safe_print("[Research results preview]:")
+        safe_print(mock_state["research_results"][:600] + ("..." if len(mock_state["research_results"]) > 600 else ""))
+
+        # Step 4 — Finance Agent (must run before Strategy AND Marketing)
+        subsection("Step 4 — Finance Agent")
+        fin_out = finance_agent_node(mock_state)
+        mock_state["specialized_outputs"].update(fin_out.get("specialized_outputs", {}))
+        if fin_out.get("failed_agents"):
+            mock_state["failed_agents"].extend(fin_out["failed_agents"])
+        safe_print("[Finance Agent preview]:")
+        safe_print(mock_state["specialized_outputs"].get("finance", "")[:600] + "...")
+
+        # Step 5 — Strategy Agent  [reads Finance pricing from state — matches graph topology]
+        subsection("Step 5 — Strategy Agent  [reads Finance pricing from state]")
+        strat_out = strategy_agent_node(mock_state)
+        mock_state["specialized_outputs"].update(strat_out.get("specialized_outputs", {}))
+        if strat_out.get("failed_agents"):
+            mock_state["failed_agents"].extend(strat_out["failed_agents"])
+        safe_print("[Strategy Agent preview]:")
+        safe_print(mock_state["specialized_outputs"].get("strategy", "")[:600] + "...")
+
+        # Step 6 — Marketing Agent  [reads Finance pricing from state, parallel with Strategy in graph]
+        subsection("Step 6 — Marketing Agent  [reads Finance pricing from state]")
+        mkt_out = marketing_agent_node(mock_state)
+        mock_state["specialized_outputs"].update(mkt_out.get("specialized_outputs", {}))
+        if mkt_out.get("failed_agents"):
+            mock_state["failed_agents"].extend(mkt_out["failed_agents"])
+        safe_print("[Marketing Agent preview]:")
+        safe_print(mock_state["specialized_outputs"].get("marketing", "")[:600] + "...")
+
+        # Step 7 — Risk Agent  [runs in parallel with Finance in the graph; sequential here for simplicity]
+        subsection("Step 7 — Risk Agent")
+        risk_out = risk_agent_node(mock_state)
+        mock_state["specialized_outputs"].update(risk_out.get("specialized_outputs", {}))
+        if risk_out.get("failed_agents"):
+            mock_state["failed_agents"].extend(risk_out["failed_agents"])
+        safe_print("[Risk Agent preview]:")
+        safe_print(mock_state["specialized_outputs"].get("risk", "")[:600] + "...")
+
+        # Check gate 1 — if any specialized agent failed, abort now
+        if mock_state["failed_agents"]:
+            safe_print(
+                f"\n[GATE 1] Pipeline aborted — failed specialized agents: "
+                f"{mock_state['failed_agents']}"
+            )
+            safe_print("Skipping remaining steps.")
+            return
+
+        # Step 8 — LLM Council
+        subsection("Step 8 — LLM Council")
+        council_out = llm_council_node(mock_state)
+        mock_state["council_feedback"] = council_out.get("council_feedback", [])
+        safe_print(f"[Council feedback count: {len(mock_state['council_feedback'])}]")
+        for i, fb in enumerate(mock_state["council_feedback"], 1):
+            safe_print(f"  Feedback [{i}] preview: {str(fb)[:300]}...")
+
+        # Step 9 — Reviewer Agent
+        subsection("Step 9 — Reviewer Agent")
+        rev_out = reviewer_agent_node(mock_state)
+        mock_state["reviewer_notes"] = rev_out.get("reviewer_notes", "")
+        if rev_out.get("failed_agents"):
+            mock_state["failed_agents"].extend(rev_out["failed_agents"])
+        safe_print("[Reviewer notes preview]:")
+        safe_print(mock_state["reviewer_notes"][:800] + "...")
+
+        # Step 10 — Critic Agent
+        subsection("Step 10 — Critic Agent")
+        critic_out = critic_agent_node(mock_state)
+        mock_state["critic_notes"] = critic_out.get("critic_notes", "")
+        if critic_out.get("failed_agents"):
+            mock_state["failed_agents"].extend(critic_out["failed_agents"])
+        safe_print("[Critic notes preview]:")
+        safe_print(mock_state["critic_notes"][:800] + "...")
+
+        # Check gate 2 — Reviewer or Critic failures
+        post_council_failures = [
+            f for f in mock_state["failed_agents"] if f in ("reviewer", "critic")
+        ]
+        if post_council_failures:
+            safe_print(
+                f"\n[GATE 2] Pipeline aborted — failed post-council agents: "
+                f"{post_council_failures}"
+            )
+            safe_print("Skipping Report Generator.")
+            return
+
+        # Step 11 — Business Rules Engine
+        subsection("Step 11 — Business Rules Engine")
+        rules_out = business_rules_engine_node(mock_state)
+        mock_state["rules_validation_result"] = rules_out.get("rules_validation_result", {})
+        is_valid = mock_state["rules_validation_result"].get("is_valid", False)
+        errors   = mock_state["rules_validation_result"].get("errors", [])
+        extracted = mock_state["rules_validation_result"].get("extracted_data", {})
+        safe_print(f"  is_valid  : {is_valid}")
+        safe_print(f"  errors    : {errors}")
+        safe_print(f"  extracted : {json.dumps(extracted, indent=4)}")
+
+        # Step 12 — Analytics & Scoring Engine
+        subsection("Step 12 — Analytics & Scoring Engine")
+        scoring_out = analytics_scoring_node(mock_state)
+        mock_state["scores"] = scoring_out.get("scores", {})
+        safe_print("[Scores]:")
+        safe_print(json.dumps(mock_state["scores"], indent=2))
 
     # ─────────────────────────────────────────────────────────────────────────
     # Step 13 — Report Generator  [PHASE 3 ADDITION]

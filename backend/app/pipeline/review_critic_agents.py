@@ -94,7 +94,7 @@ def reviewer_agent_node(state: AgentState) -> Dict[str, Any]:
                 "has_council_feedback": len(council) > 0
             },
             "output_data": {
-                "reviewer_notes": review[:1000]
+                "reviewer_notes": review
             }
         }).execute()
         print("Logged Reviewer Agent execution to Supabase.")
@@ -173,7 +173,7 @@ def critic_agent_node(state: AgentState) -> Dict[str, Any]:
                 "has_reviewer_notes": len(reviewer_notes) > 0
             },
             "output_data": {
-                "critic_notes": critique[:1000]
+                "critic_notes": critique
             }
         }).execute()
         print("Logged Critic Agent execution to Supabase.")

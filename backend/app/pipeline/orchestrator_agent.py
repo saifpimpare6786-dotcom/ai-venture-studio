@@ -54,7 +54,8 @@ def orchestrator_agent_node(state: AgentState) -> Dict[str, Any]:
                 "plan_preview": plan[:500] if plan else ""
             },
             "output_data": {
-                "orchestration": orchestration_result[:1000]
+                "directives": orchestration_result,
+                "orchestration": orchestration_result
             }
         }).execute()
         print("Logged Orchestrator Agent execution to Supabase.")

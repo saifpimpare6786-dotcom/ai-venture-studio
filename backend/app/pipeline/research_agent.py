@@ -115,7 +115,8 @@ def research_agent_node(state: AgentState) -> Dict[str, Any]:
                     "cached_chunks_count": len(existing_chunks)
                 },
                 "output_data": {
-                    "research_summary": research_summary[:1000]
+                    "research_results": research_summary,
+                    "research_summary": research_summary
                 }
             }).execute()
             print("Logged cached Research Agent execution to Supabase.")
@@ -224,7 +225,8 @@ def research_agent_node(state: AgentState) -> Dict[str, Any]:
                 "extracted_queries": queries
             },
             "output_data": {
-                "research_summary": research_summary[:1000],
+                "research_results": research_summary,
+                "research_summary": research_summary,
                 "raw_results_keys": list(all_raw_results.keys())
             }
         }).execute()
