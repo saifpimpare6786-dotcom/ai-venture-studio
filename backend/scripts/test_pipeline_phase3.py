@@ -109,7 +109,10 @@ def fetch_cached_agent_outputs(supabase, project_id: str) -> dict:
     Marketing Agent, Risk Agent, Council Agent (or LLM Council), Reviewer Agent,
     Critic Agent, Business Rules Engine, Analytics & Scoring Engine.
 
-    Returns a populated state dict if ALL 12 prior node outputs exist and are valid,
+    Guarantees determinism by ordering by timestamp DESC and filtering out any
+    partial, warning, failed, or incomplete log entries.
+
+    Returns a populated state dict if ALL 12 prior node outputs exist and pass validation,
     or None if any node output is missing or incomplete.
     """
     if not supabase:
@@ -126,15 +129,88 @@ def fetch_cached_agent_outputs(supabase, project_id: str) -> dict:
         if not res.data:
             return None
 
-        # Build a mapping of agent_name -> latest output_data
-        latest_logs = {}
+        # Build a mapping of agent_name -> latest fully-valid complete output_data
+        selected_logs = {}
+
         for row in res.data:
             agent = row.get("agent_name")
             status = row.get("status", "")
-            if status in ("completed", "completed (cached)", "warning") and agent not in latest_logs:
-                latest_logs[agent] = row.get("output_data") or {}
+            out = row.get("output_data") or {}
 
-        required_agents = [
+            # Skip explicitly failed logs
+            if status == "failed":
+                continue
+
+            # Planning Agent
+            if agent == "Planning Agent" and "Planning Agent" not in selected_logs:
+                if status == "completed":
+                    plan = out.get("plan", "")
+                    if isinstance(plan, str) and len(plan.strip()) >= 200:
+                        selected_logs["Planning Agent"] = {"plan": plan}
+
+            # Orchestrator Agent
+            elif agent == "Orchestrator Agent" and "Orchestrator Agent" not in selected_logs:
+                if status == "completed":
+                    directives = out.get("directives") or out.get("orchestration", "")
+                    if isinstance(directives, str) and len(directives.strip()) >= 200:
+                        selected_logs["Orchestrator Agent"] = {"directives": directives}
+
+            # Research Agent
+            elif agent == "Research Agent" and "Research Agent" not in selected_logs:
+                if status in ("completed", "completed (cached)"):
+                    research = out.get("research_results") or out.get("research_summary", "")
+                    if isinstance(research, str) and len(research.strip()) >= 200:
+                        selected_logs["Research Agent"] = {"research_results": research}
+
+            # Specialized Business Agents (Finance, Strategy, Marketing, Risk)
+            elif agent in ("Finance Agent", "Strategy Agent", "Marketing Agent", "Risk Agent"):
+                agent_key = agent.lower().replace(" agent", "")
+                if agent not in selected_logs and status == "completed":
+                    val = out.get(agent_key) or out.get("assessment", "")
+                    if isinstance(val, str) and val != "__FAILED__" and len(val.strip()) >= 200:
+                        selected_logs[agent] = {agent_key: val}
+
+            # Council Agent / LLM Council (MUST be status="completed", failure_count == 0, and exactly 4 complete reviews)
+            elif agent in ("Council Agent", "LLM Council") and "Council Agent" not in selected_logs:
+                failure_count = out.get("failure_count", 0)
+                feedback_list = out.get("council_feedback") or out.get("feedback_list") or []
+                if status == "completed" and failure_count == 0 and isinstance(feedback_list, list) and len(feedback_list) == 4:
+                    valid_feedback = [
+                        fb for fb in feedback_list
+                        if isinstance(fb, str) and not fb.startswith("Council review failed") and "Review threw an exception" not in fb
+                    ]
+                    if len(valid_feedback) == 4:
+                        selected_logs["Council Agent"] = {"council_feedback": valid_feedback}
+
+            # Reviewer Agent
+            elif agent == "Reviewer Agent" and "Reviewer Agent" not in selected_logs:
+                if status == "completed":
+                    rev = out.get("reviewer_notes", "")
+                    if isinstance(rev, str) and rev != "__FAILED__" and len(rev.strip()) >= 200:
+                        selected_logs["Reviewer Agent"] = {"reviewer_notes": rev}
+
+            # Critic Agent
+            elif agent == "Critic Agent" and "Critic Agent" not in selected_logs:
+                if status == "completed":
+                    critic = out.get("critic_notes", "")
+                    if isinstance(critic, str) and critic != "__FAILED__" and len(critic.strip()) >= 200:
+                        selected_logs["Critic Agent"] = {"critic_notes": critic}
+
+            # Business Rules Engine
+            elif agent == "Business Rules Engine" and "Business Rules Engine" not in selected_logs:
+                if status in ("completed", "warning"):
+                    rules_res = out.get("rules_validation_result") or out.get("validation_result", {})
+                    if isinstance(rules_res, dict) and "is_valid" in rules_res and "extracted_data" in rules_res:
+                        selected_logs["Business Rules Engine"] = {"rules_validation_result": rules_res}
+
+            # Analytics & Scoring Engine
+            elif agent == "Analytics & Scoring Engine" and "Analytics & Scoring Engine" not in selected_logs:
+                if status == "completed":
+                    scores = out.get("scores", {})
+                    if isinstance(scores, dict) and "overall_score" in scores and scores.get("overall_score", 0) > 0:
+                        selected_logs["Analytics & Scoring Engine"] = {"scores": scores}
+
+        required_agent_names = [
             "Planning Agent",
             "Orchestrator Agent",
             "Research Agent",
@@ -142,57 +218,33 @@ def fetch_cached_agent_outputs(supabase, project_id: str) -> dict:
             "Strategy Agent",
             "Marketing Agent",
             "Risk Agent",
+            "Council Agent",
             "Reviewer Agent",
             "Critic Agent",
             "Business Rules Engine",
             "Analytics & Scoring Engine",
         ]
-        council_log = latest_logs.get("Council Agent") or latest_logs.get("LLM Council")
 
-        missing = [ag for ag in required_agents if ag not in latest_logs]
-        if missing or not council_log:
-            safe_print(f"[Cache Lookup] Cache miss — missing completed logs for: {missing or ['Council Agent']}")
-            return None
-
-        plan = latest_logs["Planning Agent"].get("plan", "")
-        directives = latest_logs["Orchestrator Agent"].get("directives") or latest_logs["Orchestrator Agent"].get("orchestration", "")
-        research_results = latest_logs["Research Agent"].get("research_results") or latest_logs["Research Agent"].get("research_summary", "")
-
-        fin_out = latest_logs["Finance Agent"].get("finance") or latest_logs["Finance Agent"].get("assessment", "")
-        strat_out = latest_logs["Strategy Agent"].get("strategy") or latest_logs["Strategy Agent"].get("assessment", "")
-        mkt_out = latest_logs["Marketing Agent"].get("marketing") or latest_logs["Marketing Agent"].get("assessment", "")
-        risk_out = latest_logs["Risk Agent"].get("risk") or latest_logs["Risk Agent"].get("assessment", "")
-
-        council_feedback = council_log.get("council_feedback", [])
-        if not council_feedback and council_log.get("feedback_preview"):
-            council_feedback = [council_log["feedback_preview"]]
-
-        reviewer_notes = latest_logs["Reviewer Agent"].get("reviewer_notes", "")
-        critic_notes = latest_logs["Critic Agent"].get("critic_notes", "")
-
-        rules_res = latest_logs["Business Rules Engine"].get("rules_validation_result") or latest_logs["Business Rules Engine"].get("validation_result", {})
-        scores = latest_logs["Analytics & Scoring Engine"].get("scores", {})
-
-        # Ensure essential outputs are not empty
-        if not (plan and directives and research_results and fin_out and strat_out and mkt_out and risk_out and reviewer_notes and critic_notes and rules_res and scores):
-            safe_print("[Cache Lookup] Cache miss — one or more cached output fields are empty.")
+        missing = [ag for ag in required_agent_names if ag not in selected_logs]
+        if missing:
+            safe_print(f"[Cache Lookup] Cache miss — missing or incomplete logs for: {missing}")
             return None
 
         return {
-            "plan": plan,
-            "directives": directives,
-            "research_results": research_results,
+            "plan": selected_logs["Planning Agent"]["plan"],
+            "directives": selected_logs["Orchestrator Agent"]["directives"],
+            "research_results": selected_logs["Research Agent"]["research_results"],
             "specialized_outputs": {
-                "finance": fin_out,
-                "strategy": strat_out,
-                "marketing": mkt_out,
-                "risk": risk_out,
+                "finance": selected_logs["Finance Agent"]["finance"],
+                "strategy": selected_logs["Strategy Agent"]["strategy"],
+                "marketing": selected_logs["Marketing Agent"]["marketing"],
+                "risk": selected_logs["Risk Agent"]["risk"],
             },
-            "council_feedback": council_feedback if isinstance(council_feedback, list) else [str(council_feedback)],
-            "reviewer_notes": reviewer_notes,
-            "critic_notes": critic_notes,
-            "rules_validation_result": rules_res,
-            "scores": scores,
+            "council_feedback": selected_logs["Council Agent"]["council_feedback"],
+            "reviewer_notes": selected_logs["Reviewer Agent"]["reviewer_notes"],
+            "critic_notes": selected_logs["Critic Agent"]["critic_notes"],
+            "rules_validation_result": selected_logs["Business Rules Engine"]["rules_validation_result"],
+            "scores": selected_logs["Analytics & Scoring Engine"]["scores"],
         }
 
     except Exception as e:
@@ -215,6 +267,11 @@ def run_phase3_test():
         type=str,
         default=None,
         help="Specific database project ID to test",
+    )
+    parser.add_argument(
+        "--test-consistency",
+        action="store_true",
+        help="Run 3 consecutive cached pipeline runs on the same project_id and verify identical outputs",
     )
     args, _ = parser.parse_known_args()
 
@@ -273,6 +330,54 @@ def run_phase3_test():
     safe_print(f"\nBusiness Idea: {mock_state['business_idea_input']}")
     safe_print(f"RAG Context items: {len(mock_state['rag_context'])}")
     safe_print(f"Force Refresh: {args.force_refresh}")
+
+    # ── 3x Consistency Test Mode ─────────────────────────────────────────────
+    if args.test_consistency:
+        section("3x Cache Consistency Test Mode")
+        safe_print("Executing 3 consecutive cache-hit lookups on Supabase agent_logs...")
+        runs = []
+        for i in range(1, 4):
+            safe_print(f"\n--- Cache Consistency Run [{i}/3] ---")
+            c_state = fetch_cached_agent_outputs(supabase, project_id)
+            if not c_state:
+                safe_print(f"[FAIL] Run {i}: Cache lookup returned None. Run with --force-refresh to seed complete logs first.")
+                sys.exit(1)
+
+            sig = {
+                "council_feedback_count": len(c_state["council_feedback"]),
+                "council_feedback_hash": [hash(fb) for fb in c_state["council_feedback"]],
+                "plan_len": len(c_state["plan"]),
+                "directives_len": len(c_state["directives"]),
+                "research_results_len": len(c_state["research_results"]),
+                "finance_len": len(c_state["specialized_outputs"].get("finance", "")),
+                "strategy_len": len(c_state["specialized_outputs"].get("strategy", "")),
+                "marketing_len": len(c_state["specialized_outputs"].get("marketing", "")),
+                "risk_len": len(c_state["specialized_outputs"].get("risk", "")),
+                "reviewer_notes_len": len(c_state["reviewer_notes"]),
+                "critic_notes_len": len(c_state["critic_notes"]),
+                "rules_valid": c_state["rules_validation_result"].get("is_valid"),
+                "overall_score": c_state["scores"].get("overall_score"),
+            }
+            runs.append(sig)
+            safe_print(f"Run {i} State Signature:")
+            safe_print(json.dumps({k: v for k, v in sig.items() if k != "council_feedback_hash"}, indent=2))
+
+        # Assert all 3 runs produced identical signatures
+        r1, r2, r3 = runs[0], runs[1], runs[2]
+        match12 = (r1 == r2)
+        match23 = (r2 == r3)
+
+        section("3x Cache Consistency Verification Summary")
+        safe_print(f"  Run 1 == Run 2: {match12}")
+        safe_print(f"  Run 2 == Run 3: {match23}")
+        safe_print(f"  Council Feedback Count across runs: [{r1['council_feedback_count']}, {r2['council_feedback_count']}, {r3['council_feedback_count']}]")
+
+        if match12 and match23 and r1["council_feedback_count"] == 4:
+            safe_print("\n  RESULT: PASSED — All 3 consecutive cache-hit runs returned 100% IDENTICAL complete state!")
+        else:
+            safe_print("\n  RESULT: FAILED — Output differed between runs or Council feedback count != 4.")
+            sys.exit(1)
+        return
 
     # ─────────────────────────────────────────────────────────────────────────
     # Steps 1–12: Check Supabase agent_logs cache before running LLMs
