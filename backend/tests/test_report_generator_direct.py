@@ -111,13 +111,22 @@ def run_test():
     try:
         db_res = supabase.table("reports").select("report_type, status, content").eq("project_id", project_id).execute()
         print(f"Database records found: {len(db_res.data)}")
+        expected_reports = {
+            "Executive Summary", "SWOT Analysis", "Financial Projection",
+            "Investment Readiness Report", "Business Plan"
+        }
+        found_reports = set()
         for record in db_res.data:
-            print(f"- {record['report_type']}: status={record['status']}, has_error={'error' in record['content']}")
-            assert record['status'] in ["Completed", "Failed"]  # Failed from Case 1 might still be there if not overwritten, but it should have overwritten
-            # Wait, let's verify if Case 2 overrode it and made it Completed
-            if record['status'] != "Completed":
-                print(f"WARNING: Report '{record['report_type']}' status is not Completed (it is {record['status']})")
-        print("SUCCESS: Test Case 2 executed and verified database records.")
+            report_type = record['report_type']
+            found_reports.add(report_type)
+            has_error = "error" in record.get("content", {})
+            print(f"- {report_type}: status={record['status']}, has_error={has_error}")
+            assert record['status'] == "Completed", f"Report '{report_type}' status must be Completed (got {record['status']})"
+            assert not has_error, f"Report '{report_type}' contains error: {record['content']}"
+
+        missing = expected_reports - found_reports
+        assert not missing, f"Missing report types in DB: {missing}"
+        print("SUCCESS: Test Case 2 executed — ALL 5 report types generated successfully with status 'Completed' in a single run!")
     except Exception as e:
         print(f"Database assertion failed: {str(e)}")
 

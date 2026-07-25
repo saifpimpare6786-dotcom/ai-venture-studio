@@ -10,6 +10,7 @@ Pattern for each report type:
 Adding a new report type = add a schema + one registry entry. Zero new node logic.
 """
 import json
+import re
 from typing import Dict, Any, List, Optional
 from app.database.supabase import get_supabase_client
 from services.llm import call_llm
@@ -33,6 +34,43 @@ def extract_json_block(text: str) -> str:
     if text.endswith("```"):
         text = text[:-3]
     return text.strip()
+
+
+def safe_parse_json(raw_text: str) -> dict:
+    """
+    Parses raw LLM string into a JSON dictionary with sanitization and fallbacks.
+    - Strips markdown code fences (```json ... ```).
+    - First attempts standard json.loads(cleaned).
+    - Second attempts json.loads(cleaned, strict=False) to tolerate unescaped control
+      characters like literal newlines/tabs inside string literals (fixes "Invalid control character").
+    - Third attempts non-printable control character stripping (ASCII 0x00-0x1F except \n, \r, \t) + strict=False.
+    Raises json.JSONDecodeError if all parse attempts fail.
+    """
+    if isinstance(raw_text, dict):
+        return raw_text
+    cleaned = extract_json_block(str(raw_text))
+
+    # 1. Standard json.loads
+    try:
+        return json.loads(cleaned)
+    except Exception:
+        pass
+
+    # 2. Strict=False (handles unescaped literal control chars inside strings)
+    try:
+        return json.loads(cleaned, strict=False)
+    except Exception:
+        pass
+
+    # 3. Strip non-printable ASCII control characters 0x00-0x08, 0x0B, 0x0C, 0x0E-0x1F
+    sanitized = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f]', '', cleaned)
+    try:
+        return json.loads(sanitized, strict=False)
+    except Exception:
+        pass
+
+    # Final attempt: let json.loads raise JSONDecodeError so caller gets exact line error
+    return json.loads(sanitized, strict=False)
 
 
 # ---------------------------------------------------------------------------
@@ -205,6 +243,7 @@ def _build_registry(context: dict) -> dict:
         "Executive Summary": {
             "schema": ExecutiveSummarySchema,
             "export_formats": ["docx", "pptx", "pdf"],
+            "max_tokens": 8192,
             "export_mapping": {
                 "concept":                    "Venture Concept & Value Proposition",
                 "market_opportunity":         "Market Opportunity & Target Segment",
@@ -267,6 +306,7 @@ Target JSON Format — return ONLY this block wrapped in ```json ... ```:
         "SWOT Analysis": {
             "schema": SwotAnalysisSchema,
             "export_formats": ["docx", "pptx", "pdf"],
+            "max_tokens": 8192,
             "export_mapping": {
                 "strengths":    "Venture Strengths",
                 "weaknesses":   "Venture Weaknesses",
@@ -325,6 +365,7 @@ Target JSON Format — return ONLY this block wrapped in ```json ... ```:
         "Financial Projection": {
             "schema": FinancialProjectionSchema,
             "export_formats": ["docx", "pdf"],
+            "max_tokens": 8192,
             "export_mapping": {
                 "revenue_model_details": "Monetization & Pricing Tiers",
                 "pricing_sanity_check":  "Sanity Check & Margins",
@@ -370,6 +411,7 @@ Target JSON Format — return ONLY this block wrapped in ```json ... ```:
         "Investment Readiness Report": {
             "schema": InvestmentReadinessSchema,
             "export_formats": ["docx", "pptx", "pdf"],
+            "max_tokens": 8192,
             "export_mapping": {
                 "investment_thesis":      "Investment Thesis",
                 "scoring_breakdown":      "Scoring Engine Rubric & Breakdown",
@@ -500,9 +542,9 @@ Target JSON Format — return ONLY this block wrapped in ```json ... ```:
 # ---------------------------------------------------------------------------
 
 JSON_REPAIR_PROMPT = """
-The following JSON is malformed or truncated (it may have been cut off mid-string).
-Return the COMPLETE, VALID JSON object below, fixing any truncation or unescaped characters.
-Do NOT add new fields or change existing values — only fix structural JSON errors.
+The following JSON response was truncated or malformed (it may have been cut off mid-string or contain unescaped characters/syntax errors).
+Return the COMPLETE, VALID JSON object below, fixing any truncation, missing brackets/quotes, or unescaped control characters.
+Continue and complete any cut-off strings or fields. Do NOT truncate or drop required fields.
 Wrap your output in ```json ... ``` fences.
 
 Malformed input:
@@ -595,20 +637,20 @@ Target JSON Format — return ONLY this block wrapped in ```json ... ```:
 
     cleaned_a = extract_json_block(raw_a)
     try:
-        part_a = json.loads(cleaned_a)
-    except json.JSONDecodeError as err_a:
+        part_a = safe_parse_json(cleaned_a)
+    except Exception as err_a:
         print(f"[Business Plan Split] Part A JSON error: {err_a}. Attempting repair...")
         repair_a = call_llm(
             prompt=JSON_REPAIR_PROMPT.format(malformed=cleaned_a[:6000]),
-            system_prompt="You are a JSON repair assistant. Return only valid JSON wrapped in ```json ... ``` fences.",
+            system_prompt="You are a JSON repair assistant. Complete and repair truncated JSON. Return only valid JSON wrapped in ```json ... ``` fences.",
             preferred_provider=preferred,
             project_id=project_id,
             agent_name=f"Business Plan Generator [Part A Repair]{label_suffix}",
-            max_tokens=max_tokens,
+            max_tokens=max(max_tokens, 4096),
         )
         if isinstance(repair_a, dict) and repair_a.get("status") == "failed":
             raise ValueError(f"Business Plan Part A repair call failed: {repair_a['error']}")
-        part_a = json.loads(extract_json_block(repair_a))
+        part_a = safe_parse_json(repair_a)
 
     # ── Call B: Marketing, Ops, Finance & Risk ───────────────────────────
     prompt_b = f"""You are the Report Generator for AI Venture Studio.
@@ -661,20 +703,20 @@ Target JSON Format — return ONLY this block wrapped in ```json ... ```:
 
     cleaned_b = extract_json_block(raw_b)
     try:
-        part_b = json.loads(cleaned_b)
-    except json.JSONDecodeError as err_b:
+        part_b = safe_parse_json(cleaned_b)
+    except Exception as err_b:
         print(f"[Business Plan Split] Part B JSON error: {err_b}. Attempting repair...")
         repair_b = call_llm(
             prompt=JSON_REPAIR_PROMPT.format(malformed=cleaned_b[:6000]),
-            system_prompt="You are a JSON repair assistant. Return only valid JSON wrapped in ```json ... ``` fences.",
+            system_prompt="You are a JSON repair assistant. Complete and repair truncated JSON. Return only valid JSON wrapped in ```json ... ``` fences.",
             preferred_provider=preferred,
             project_id=project_id,
             agent_name=f"Business Plan Generator [Part B Repair]{label_suffix}",
-            max_tokens=max_tokens,
+            max_tokens=max(max_tokens, 4096),
         )
         if isinstance(repair_b, dict) and repair_b.get("status") == "failed":
             raise ValueError(f"Business Plan Part B repair call failed: {repair_b['error']}")
-        part_b = json.loads(extract_json_block(repair_b))
+        part_b = safe_parse_json(repair_b)
 
     # ── Merge A + B into full Business Plan dict ──────────────────────────
     part_a_clean = {k: v for k, v in part_a.items() if not k.startswith("_")}
@@ -722,7 +764,7 @@ def _generate_report_json(
     Raises:
         ValueError / json.JSONDecodeError: on total failure.
     """
-    max_tokens = config.get("max_tokens", 1024)
+    max_tokens = config.get("max_tokens", 8192)
     preferred   = config.get("preferred_provider", "gemini")
 
     # ── Business Plan: split-call path ───────────────────────────────────
@@ -791,33 +833,54 @@ def _generate_report_json(
     if isinstance(raw_text, dict) and raw_text.get("status") == "failed":
         raise ValueError(raw_text["error"])
 
-    cleaned = extract_json_block(raw_text)
-
     try:
-        return json.loads(cleaned)
-    except json.JSONDecodeError as first_err:
+        return safe_parse_json(raw_text)
+    except Exception as first_err:
         print(
             f"[Report Generator] '{report_type}' — JSON parse error on attempt 1: {first_err}. "
             f"Attempting JSON repair retry..."
         )
 
-    # ── Attempt 2: repair retry ───────────────────────────────────────────
+    # ── Attempt 2: repair retry (with max_tokens=8192) ───────────────────
+    cleaned = extract_json_block(raw_text)
     repair_prompt = JSON_REPAIR_PROMPT.format(malformed=cleaned[:6000])
+    repair_max_tokens = max(max_tokens, 8192)
+
     repaired_text = call_llm(
         prompt=repair_prompt,
-        system_prompt="You are a JSON repair assistant. Return only valid JSON wrapped in ```json ... ``` fences.",
+        system_prompt="You are a JSON repair assistant. Complete and repair truncated JSON. Return only valid JSON wrapped in ```json ... ``` fences.",
         preferred_provider=preferred,
         project_id=project_id,
         agent_name=f"{report_type} Generator [JSON Repair]",
-        max_tokens=max_tokens,
+        max_tokens=repair_max_tokens,
     )
 
     if isinstance(repaired_text, dict) and repaired_text.get("status") == "failed":
         raise ValueError(f"JSON repair LLM call failed: {repaired_text['error']}")
 
-    repaired_cleaned = extract_json_block(repaired_text)
-    # Let JSONDecodeError propagate — caller's except clause will catch it
-    return json.loads(repaired_cleaned)
+    try:
+        return safe_parse_json(repaired_text)
+    except Exception as second_err:
+        print(
+            f"[Report Generator] '{report_type}' — JSON repair retry failed: {second_err}. "
+            f"Attempting Attempt 3: reduced-context fallback retry..."
+        )
+
+    # ── Attempt 3: reduced-context fallback retry ─────────────────────────
+    concise_system_prompt = config["system_prompt"] + "\n\nCRITICAL: Keep response concise and complete. Ensure all JSON keys are present and valid."
+    reduced_text = call_llm(
+        prompt="Generate a concise, complete JSON report as instructed. Ensure all JSON brackets and quotes are properly closed.",
+        system_prompt=concise_system_prompt,
+        preferred_provider=preferred,
+        project_id=project_id,
+        agent_name=f"{report_type} Generator [Reduced Fallback]",
+        max_tokens=8192,
+    )
+
+    if isinstance(reduced_text, dict) and reduced_text.get("status") == "failed":
+        raise ValueError(f"Reduced-context fallback call failed: {reduced_text['error']}")
+
+    return safe_parse_json(reduced_text)
 
 
 
