@@ -102,154 +102,8 @@ def subsection(title: str):
     safe_print(f"\n--- {title} ---")
 
 
-def fetch_cached_agent_outputs(supabase, project_id: str) -> dict:
-    """
-    Attempts to fetch the latest completed output from Supabase agent_logs for all 12 prior nodes:
-    Planning Agent, Orchestrator Agent, Research Agent, Finance Agent, Strategy Agent,
-    Marketing Agent, Risk Agent, Council Agent (or LLM Council), Reviewer Agent,
-    Critic Agent, Business Rules Engine, Analytics & Scoring Engine.
+from app.pipeline.cache import fetch_cached_agent_outputs
 
-    Guarantees determinism by ordering by timestamp DESC and filtering out any
-    partial, warning, failed, or incomplete log entries.
-
-    Returns a populated state dict if ALL 12 prior node outputs exist and pass validation,
-    or None if any node output is missing or incomplete.
-    """
-    if not supabase:
-        return None
-
-    try:
-        res = (
-            supabase.table("agent_logs")
-            .select("agent_name, status, input_data, output_data, timestamp")
-            .eq("project_id", project_id)
-            .order("timestamp", desc=True)
-            .execute()
-        )
-        if not res.data:
-            return None
-
-        # Build a mapping of agent_name -> latest fully-valid complete output_data
-        selected_logs = {}
-
-        for row in res.data:
-            agent = row.get("agent_name")
-            status = row.get("status", "")
-            out = row.get("output_data") or {}
-
-            # Skip explicitly failed logs
-            if status == "failed":
-                continue
-
-            # Planning Agent
-            if agent == "Planning Agent" and "Planning Agent" not in selected_logs:
-                if status == "completed":
-                    plan = out.get("plan", "")
-                    if isinstance(plan, str) and len(plan.strip()) >= 200:
-                        selected_logs["Planning Agent"] = {"plan": plan}
-
-            # Orchestrator Agent
-            elif agent == "Orchestrator Agent" and "Orchestrator Agent" not in selected_logs:
-                if status == "completed":
-                    directives = out.get("directives") or out.get("orchestration", "")
-                    if isinstance(directives, str) and len(directives.strip()) >= 200:
-                        selected_logs["Orchestrator Agent"] = {"directives": directives}
-
-            # Research Agent
-            elif agent == "Research Agent" and "Research Agent" not in selected_logs:
-                if status in ("completed", "completed (cached)"):
-                    research = out.get("research_results") or out.get("research_summary", "")
-                    if isinstance(research, str) and len(research.strip()) >= 200:
-                        selected_logs["Research Agent"] = {"research_results": research}
-
-            # Specialized Business Agents (Finance, Strategy, Marketing, Risk)
-            elif agent in ("Finance Agent", "Strategy Agent", "Marketing Agent", "Risk Agent"):
-                agent_key = agent.lower().replace(" agent", "")
-                if agent not in selected_logs and status == "completed":
-                    val = out.get(agent_key) or out.get("assessment", "")
-                    if isinstance(val, str) and val != "__FAILED__" and len(val.strip()) >= 200:
-                        selected_logs[agent] = {agent_key: val}
-
-            # Council Agent / LLM Council (MUST be status="completed", failure_count == 0, and exactly 4 complete reviews)
-            elif agent in ("Council Agent", "LLM Council") and "Council Agent" not in selected_logs:
-                failure_count = out.get("failure_count", 0)
-                feedback_list = out.get("council_feedback") or out.get("feedback_list") or []
-                if status == "completed" and failure_count == 0 and isinstance(feedback_list, list) and len(feedback_list) == 4:
-                    valid_feedback = [
-                        fb for fb in feedback_list
-                        if isinstance(fb, str) and not fb.startswith("Council review failed") and "Review threw an exception" not in fb
-                    ]
-                    if len(valid_feedback) == 4:
-                        selected_logs["Council Agent"] = {"council_feedback": valid_feedback}
-
-            # Reviewer Agent
-            elif agent == "Reviewer Agent" and "Reviewer Agent" not in selected_logs:
-                if status == "completed":
-                    rev = out.get("reviewer_notes", "")
-                    if isinstance(rev, str) and rev != "__FAILED__" and len(rev.strip()) >= 200:
-                        selected_logs["Reviewer Agent"] = {"reviewer_notes": rev}
-
-            # Critic Agent
-            elif agent == "Critic Agent" and "Critic Agent" not in selected_logs:
-                if status == "completed":
-                    critic = out.get("critic_notes", "")
-                    if isinstance(critic, str) and critic != "__FAILED__" and len(critic.strip()) >= 200:
-                        selected_logs["Critic Agent"] = {"critic_notes": critic}
-
-            # Business Rules Engine
-            elif agent == "Business Rules Engine" and "Business Rules Engine" not in selected_logs:
-                if status in ("completed", "warning"):
-                    rules_res = out.get("rules_validation_result") or out.get("validation_result", {})
-                    if isinstance(rules_res, dict) and "is_valid" in rules_res and "extracted_data" in rules_res:
-                        selected_logs["Business Rules Engine"] = {"rules_validation_result": rules_res}
-
-            # Analytics & Scoring Engine
-            elif agent == "Analytics & Scoring Engine" and "Analytics & Scoring Engine" not in selected_logs:
-                if status == "completed":
-                    scores = out.get("scores", {})
-                    if isinstance(scores, dict) and "overall_score" in scores and scores.get("overall_score", 0) > 0:
-                        selected_logs["Analytics & Scoring Engine"] = {"scores": scores}
-
-        required_agent_names = [
-            "Planning Agent",
-            "Orchestrator Agent",
-            "Research Agent",
-            "Finance Agent",
-            "Strategy Agent",
-            "Marketing Agent",
-            "Risk Agent",
-            "Council Agent",
-            "Reviewer Agent",
-            "Critic Agent",
-            "Business Rules Engine",
-            "Analytics & Scoring Engine",
-        ]
-
-        missing = [ag for ag in required_agent_names if ag not in selected_logs]
-        if missing:
-            safe_print(f"[Cache Lookup] Cache miss — missing or incomplete logs for: {missing}")
-            return None
-
-        return {
-            "plan": selected_logs["Planning Agent"]["plan"],
-            "directives": selected_logs["Orchestrator Agent"]["directives"],
-            "research_results": selected_logs["Research Agent"]["research_results"],
-            "specialized_outputs": {
-                "finance": selected_logs["Finance Agent"]["finance"],
-                "strategy": selected_logs["Strategy Agent"]["strategy"],
-                "marketing": selected_logs["Marketing Agent"]["marketing"],
-                "risk": selected_logs["Risk Agent"]["risk"],
-            },
-            "council_feedback": selected_logs["Council Agent"]["council_feedback"],
-            "reviewer_notes": selected_logs["Reviewer Agent"]["reviewer_notes"],
-            "critic_notes": selected_logs["Critic Agent"]["critic_notes"],
-            "rules_validation_result": selected_logs["Business Rules Engine"]["rules_validation_result"],
-            "scores": selected_logs["Analytics & Scoring Engine"]["scores"],
-        }
-
-    except Exception as e:
-        safe_print(f"[Cache Lookup Warning] Error querying agent_logs: {e}")
-        return None
 
 
 # ---------------------------------------------------------------------------
@@ -343,6 +197,22 @@ def run_phase3_test():
                 safe_print(f"[FAIL] Run {i}: Cache lookup returned None. Run with --force-refresh to seed complete logs first.")
                 sys.exit(1)
 
+            # Calculate total context length and estimated input tokens for Report Generator
+            council_str = "\n\n".join(c_state["council_feedback"])
+            total_context_chars = (
+                len(c_state["plan"])
+                + len(c_state["directives"])
+                + len(c_state["research_results"])
+                + len(c_state["specialized_outputs"].get("finance", ""))
+                + len(c_state["specialized_outputs"].get("strategy", ""))
+                + len(c_state["specialized_outputs"].get("marketing", ""))
+                + len(c_state["specialized_outputs"].get("risk", ""))
+                + len(council_str)
+                + len(c_state["reviewer_notes"])
+                + len(c_state["critic_notes"])
+            )
+            est_rpt_tokens = total_context_chars // 4
+
             sig = {
                 "council_feedback_count": len(c_state["council_feedback"]),
                 "council_feedback_hash": [hash(fb) for fb in c_state["council_feedback"]],
@@ -357,6 +227,7 @@ def run_phase3_test():
                 "critic_notes_len": len(c_state["critic_notes"]),
                 "rules_valid": c_state["rules_validation_result"].get("is_valid"),
                 "overall_score": c_state["scores"].get("overall_score"),
+                "est_report_gen_input_tokens": est_rpt_tokens,
             }
             runs.append(sig)
             safe_print(f"Run {i} State Signature:")
@@ -371,9 +242,10 @@ def run_phase3_test():
         safe_print(f"  Run 1 == Run 2: {match12}")
         safe_print(f"  Run 2 == Run 3: {match23}")
         safe_print(f"  Council Feedback Count across runs: [{r1['council_feedback_count']}, {r2['council_feedback_count']}, {r3['council_feedback_count']}]")
+        safe_print(f"  Report Generator Input Tokens across runs: [{r1['est_report_gen_input_tokens']}, {r2['est_report_gen_input_tokens']}, {r3['est_report_gen_input_tokens']}]")
 
         if match12 and match23 and r1["council_feedback_count"] == 4:
-            safe_print("\n  RESULT: PASSED — All 3 consecutive cache-hit runs returned 100% IDENTICAL complete state!")
+            safe_print("\n  RESULT: PASSED — All 3 consecutive cache-hit runs returned 100% IDENTICAL complete state & token counts!")
         else:
             safe_print("\n  RESULT: FAILED — Output differed between runs or Council feedback count != 4.")
             sys.exit(1)
@@ -673,7 +545,7 @@ def run_phase3_test():
             safe_print(f"    - {err}")
 
     # ── Final summary ─────────────────────────────────────────────────────
-    section("Phase 3 Test Complete")
+    section("Full Report Suite (8 Reports) Test Complete")
     rules_ok  = mock_state["rules_validation_result"].get("is_valid", False)
     score_val = mock_state["scores"].get("overall_score", "N/A")
     safe_print(f"  Business Rules validation : {'PASSED' if rules_ok else 'FAILED'}")

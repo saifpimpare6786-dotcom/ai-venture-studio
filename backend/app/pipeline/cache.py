@@ -1,0 +1,198 @@
+from typing import Dict, Any, Optional
+
+def fetch_cached_agent_outputs(supabase, project_id: str) -> Optional[Dict[str, Any]]:
+    """
+    Attempts to fetch the latest completed, fully valid output from Supabase agent_logs
+    for all 12 prior nodes:
+    1. Planning Agent
+    2. Orchestrator Agent
+    3. Research Agent
+    4. Finance Agent
+    5. Strategy Agent
+    6. Marketing Agent
+    7. Risk Agent
+    8. Council Agent (or LLM Council)
+    9. Reviewer Agent
+    10. Critic Agent
+    11. Business Rules Engine
+    12. Analytics & Scoring Engine
+
+    Guarantees determinism by ordering by timestamp DESC, id DESC and querying per node type
+    to strictly filter out any partial, warning, failed, or incomplete log entries in favor
+    of the most recent fully complete one.
+
+    Returns a populated state dict if ALL 12 prior node outputs exist and pass validation,
+    or None if any node output is missing or incomplete.
+    """
+    if not supabase or not project_id:
+        return None
+
+    try:
+        # Fetch all log rows for project_id ordered deterministically by timestamp DESC, id DESC
+        res = (
+            supabase.table("agent_logs")
+            .select("agent_name, status, input_data, output_data, timestamp, id")
+            .eq("project_id", project_id)
+            .order("timestamp", desc=True)
+            .order("id", desc=True)
+            .execute()
+        )
+
+        if not res.data:
+            return None
+
+        # Helper to find latest valid log entry for given agent name filter function
+        def get_latest_valid_output(agent_name_matcher, validator_fn):
+            for row in res.data:
+                name = row.get("agent_name", "")
+                if agent_name_matcher(name):
+                    status = row.get("status", "")
+                    out = row.get("output_data") or {}
+                    val = validator_fn(status, out)
+                    if val is not None:
+                        return val
+            return None
+
+        # 1. Planning Agent
+        def val_planning(status, out):
+            if status == "completed":
+                plan = out.get("plan", "")
+                if isinstance(plan, str) and len(plan.strip()) >= 200 and not plan.startswith("Execution failed:") and plan != "__FAILED__":
+                    return plan
+            return None
+
+        plan = get_latest_valid_output(lambda name: name == "Planning Agent", val_planning)
+        if not plan:
+            return None
+
+        # 2. Orchestrator Agent
+        def val_orch(status, out):
+            if status == "completed":
+                directives = out.get("directives") or out.get("orchestration", "")
+                if isinstance(directives, str) and len(directives.strip()) >= 200 and not directives.startswith("Execution failed:") and directives != "__FAILED__":
+                    return directives
+            return None
+
+        directives = get_latest_valid_output(lambda name: name == "Orchestrator Agent", val_orch)
+        if not directives:
+            return None
+
+        # 3. Research Agent
+        def val_research(status, out):
+            if status in ("completed", "completed (cached)"):
+                res_text = out.get("research_results") or out.get("research_summary", "")
+                if isinstance(res_text, str) and len(res_text.strip()) >= 200 and not res_text.startswith("Execution failed:") and res_text != "__FAILED__":
+                    return res_text
+            return None
+
+        research_results = get_latest_valid_output(lambda name: name == "Research Agent", val_research)
+        if not research_results:
+            return None
+
+        # 4. Specialized Business Agents (Finance, Strategy, Marketing, Risk)
+        specialized_outputs = {}
+        for spec_agent, spec_key in [
+            ("Finance Agent", "finance"),
+            ("Strategy Agent", "strategy"),
+            ("Marketing Agent", "marketing"),
+            ("Risk Agent", "risk"),
+        ]:
+            def val_spec(status, out, key=spec_key):
+                if status == "completed":
+                    text = out.get(key) or out.get("assessment", "")
+                    if isinstance(text, str) and len(text.strip()) >= 200 and not text.startswith("Execution failed:") and text != "__FAILED__":
+                        return text
+                return None
+
+            spec_val = get_latest_valid_output(lambda name, sa=spec_agent: name == sa, val_spec)
+            if not spec_val:
+                return None
+            specialized_outputs[spec_key] = spec_val
+
+        # 5. Council Agent (MUST be status="completed", failure_count == 0, and exactly 4 complete valid reviews)
+        def val_council(status, out):
+            if status == "completed":
+                failure_count = out.get("failure_count", 0)
+                feedback_list = out.get("council_feedback") or out.get("feedback_list") or []
+                if failure_count == 0 and isinstance(feedback_list, list) and len(feedback_list) == 4:
+                    valid_feedback = [
+                        fb for fb in feedback_list
+                        if isinstance(fb, str)
+                        and len(fb.strip()) >= 20
+                        and not fb.startswith("Council review failed")
+                        and "Review threw an exception" not in fb
+                        and not fb.startswith("Execution failed:")
+                    ]
+                    if len(valid_feedback) == 4:
+                        return valid_feedback
+            return None
+
+        council_feedback = get_latest_valid_output(
+            lambda name: name in ("Council Agent", "LLM Council"), val_council
+        )
+        if not council_feedback:
+            return None
+
+        # 6. Reviewer Agent
+        def val_reviewer(status, out):
+            if status == "completed":
+                rev = out.get("reviewer_notes", "")
+                if isinstance(rev, str) and len(rev.strip()) >= 200 and not rev.startswith("Execution failed:") and rev != "__FAILED__":
+                    return rev
+            return None
+
+        reviewer_notes = get_latest_valid_output(lambda name: name == "Reviewer Agent", val_reviewer)
+        if not reviewer_notes:
+            return None
+
+        # 7. Critic Agent
+        def val_critic(status, out):
+            if status == "completed":
+                critic = out.get("critic_notes", "")
+                if isinstance(critic, str) and len(critic.strip()) >= 200 and not critic.startswith("Execution failed:") and critic != "__FAILED__":
+                    return critic
+            return None
+
+        critic_notes = get_latest_valid_output(lambda name: name == "Critic Agent", val_critic)
+        if not critic_notes:
+            return None
+
+        # 8. Business Rules Engine
+        def val_rules(status, out):
+            if status in ("completed", "warning"):
+                rules_res = out.get("rules_validation_result") or out.get("validation_result", {})
+                if isinstance(rules_res, dict) and "is_valid" in rules_res and "extracted_data" in rules_res:
+                    return rules_res
+            return None
+
+        rules_validation_result = get_latest_valid_output(lambda name: name == "Business Rules Engine", val_rules)
+        if not rules_validation_result:
+            return None
+
+        # 9. Analytics & Scoring Engine
+        def val_scoring(status, out):
+            if status == "completed":
+                scores = out.get("scores", {})
+                if isinstance(scores, dict) and "overall_score" in scores and scores.get("overall_score", 0) > 0:
+                    return scores
+            return None
+
+        scores = get_latest_valid_output(lambda name: name == "Analytics & Scoring Engine", val_scoring)
+        if not scores:
+            return None
+
+        return {
+            "plan": plan,
+            "directives": directives,
+            "research_results": research_results,
+            "specialized_outputs": specialized_outputs,
+            "council_feedback": council_feedback,
+            "reviewer_notes": reviewer_notes,
+            "critic_notes": critic_notes,
+            "rules_validation_result": rules_validation_result,
+            "scores": scores,
+        }
+
+    except Exception as e:
+        print(f"[Cache Lookup Warning] Error querying agent_logs: {e}")
+        return None
