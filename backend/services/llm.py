@@ -72,19 +72,27 @@ def call_gemini(
             
     raise RuntimeError("Gemini API call failed after maximum retries.")
 
+# Dynamic NIM model routing dictionary mapping agent types to optimized NVIDIA NIM models
+NIM_MODEL_ROUTING: Dict[str, str] = {
+    "default": "meta/llama-3.1-70b-instruct",
+    # Agent type dynamic routing mappings will be registered here
+}
+
 def call_nvidia_nim(
     prompt: str,
     system_prompt: str = None,
-    max_tokens: int = 1024,
+    agent_name: str = None,
+    max_tokens: int = 2048,
     json_mode: bool = False,
     response_format: dict = None,
 ) -> str:
     """
-    Calls the NVIDIA NIM API (meta/llama-3.1-70b-instruct) with built-in 429 rate limit backoff.
+    Calls the NVIDIA NIM API with built-in 429 rate limit backoff and dynamic model routing.
     
     Args:
-        max_tokens: Token budget for the completion. Default 1024 is fine for most agent nodes.
-                    Long-form report types (e.g. Business Plan) should pass 4096.
+        agent_name: Agent name or type used to dispatch to specific NIM models.
+        max_tokens: Token budget for completion. Default 2048. Auto-bumped to 8192 if agent_name
+                    contains "report" or "council".
         json_mode: If True, sets response_format to {"type": "json_object"}.
         response_format: Custom response format payload for structured output.
     """
@@ -94,13 +102,21 @@ def call_nvidia_nim(
         "Content-Type": "application/json"
     }
     
+    # Resolve model via dynamic routing dictionary
+    model_id = NIM_MODEL_ROUTING.get(agent_name, NIM_MODEL_ROUTING["default"]) if agent_name else NIM_MODEL_ROUTING["default"]
+    
+    # Adjust max_tokens: default 2048, bump to 8192 if agent_name contains "report" or "council"
+    if agent_name and any(k in agent_name.lower() for k in ("report", "council")):
+        if max_tokens < 8192:
+            max_tokens = 8192
+    
     messages = []
     if system_prompt:
         messages.append({"role": "system", "content": system_prompt})
     messages.append({"role": "user", "content": prompt})
     
     payload: Dict[str, Any] = {
-        "model": "meta/llama-3.1-70b-instruct",
+        "model": model_id,
         "messages": messages,
         "temperature": 0.2,
         "max_tokens": max_tokens
@@ -114,13 +130,13 @@ def call_nvidia_nim(
     backoff = 1.0
     for attempt in range(max_retries):
         try:
-            # Increased timeout from 60.0 to 90.0 to reduce timeouts under heavy concurrent load
-            response = httpx.post(url, json=payload, headers=headers, timeout=90.0)
+            # Increased timeout from 90.0 to 120.0 to reduce timeouts under heavy concurrent load
+            response = httpx.post(url, json=payload, headers=headers, timeout=120.0)
             if response.status_code == 200:
                 res_data = response.json()
                 return res_data["choices"][0]["message"]["content"]
             elif response.status_code == 429:
-                print(f"NVIDIA NIM 429 rate limit hit. Attempt {attempt + 1}. Retrying in {backoff}s...")
+                print(f"NVIDIA NIM 429 rate limit hit ({model_id}). Attempt {attempt + 1}. Retrying in {backoff}s...")
                 time.sleep(backoff)
                 backoff *= 2.0
             else:
@@ -131,7 +147,7 @@ def call_nvidia_nim(
             time.sleep(backoff)
             backoff *= 2.0
             
-    raise RuntimeError("NVIDIA NIM call failed after maximum retries.")
+    raise RuntimeError(f"NVIDIA NIM call failed after maximum retries for model {model_id}.")
 
 def call_llm(
     prompt: str,
@@ -139,7 +155,7 @@ def call_llm(
     preferred_provider: str = "nvidia",
     project_id: str = None,
     agent_name: str = None,
-    max_tokens: int = 1024,
+    max_tokens: int = 2048,
     response_schema: dict = None,
     json_mode: bool = False,
 ) -> Union[str, Dict[str, Any]]:
@@ -151,8 +167,8 @@ def call_llm(
       2. Returns a structured error dictionary: {"status": "failed", "error": "Error details..."}
     
     Args:
-        max_tokens: Completion token budget passed to NVIDIA NIM. Default 1024 is fine for
-                    agent reasoning nodes. Long-form reports (Business Plan etc.) should pass 4096.
+        max_tokens: Completion token budget passed to NVIDIA NIM. Default 2048 is fine for
+                    agent reasoning nodes. Long-form reports (Business Plan etc.) pass 8192.
         response_schema: Optional JSON schema dict passed to Gemini.
         json_mode: If True, enforces JSON mode / MIME type on model APIs.
     """
@@ -163,7 +179,7 @@ def call_llm(
         # 1. Execute NIM primary
         try:
             return call_nvidia_nim(
-                prompt, system_prompt, max_tokens=max_tokens, json_mode=json_mode
+                prompt, system_prompt, agent_name=agent_name, max_tokens=max_tokens, json_mode=json_mode
             )
         except Exception as e:
             primary_err = str(e)
@@ -192,7 +208,7 @@ def call_llm(
         # 2. Execute NIM fallback
         try:
             return call_nvidia_nim(
-                prompt, system_prompt, max_tokens=max_tokens, json_mode=json_mode
+                prompt, system_prompt, agent_name=agent_name, max_tokens=max_tokens, json_mode=json_mode
             )
         except Exception as e:
             fallback_err = str(e)
