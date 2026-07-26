@@ -1,11 +1,11 @@
 """
-Report Generator Node — follows the registry pattern defined in skills/report-generation/SKILL.md.
+Report Generator Node -- follows the registry pattern defined in skills/report-generation/SKILL.md.
 
 Pattern for each report type:
-  1. Pydantic schema         → app/schemas/report.py
-  2. Focused prompt template → REPORT_REGISTRY[type]["system_prompt"]
-  3. Registry entry          → REPORT_REGISTRY dict (no if/else per type)
-  4. Export mapping          → REPORT_REGISTRY[type]["export_mapping"]
+  1. Pydantic schema         -> app/schemas/report.py
+  2. Focused prompt template -> REPORT_REGISTRY[type]["system_prompt"]
+  3. Registry entry          -> REPORT_REGISTRY dict (no if/else per type)
+  4. Export mapping          -> REPORT_REGISTRY[type]["export_mapping"]
 
 Adding a new report type = add a schema + one registry entry. Zero new node logic.
 """
@@ -24,6 +24,9 @@ from app.schemas.report import (
     BusinessModelCanvasSchema,
     PestleAnalysisSchema,
     PortersFiveForcesSchema,
+    CompetitorAnalysisSchema,
+    MarketingGtmSchema,
+    RiskAssessmentMatrixSchema,
 )
 
 
@@ -77,18 +80,18 @@ def safe_parse_json(raw_text: str) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# Token estimation utilities (diagnostic — no external dependency)
+# Token estimation utilities (diagnostic -- no external dependency)
 # ---------------------------------------------------------------------------
 
 def _estimate_tokens(text: str) -> int:
-    """Rough token estimate: 1 token ≈ 4 characters (industry standard heuristic)."""
+    """Rough token estimate: 1 token  4 characters (industry standard heuristic)."""
     return max(1, len(text) // 4)
 
 
 def _log_prompt_token_estimates(context: dict) -> None:
     """
     Prints estimated input token counts for each report type to stdout.
-    Called once per pipeline run before generation starts — surfaces the
+    Called once per pipeline run before generation starts -- surfaces the
     root cause of overlong prompts without requiring a tokenizer dependency.
 
     Estimates are intentionally conservative (chars/4); real counts will be
@@ -105,7 +108,7 @@ def _log_prompt_token_estimates(context: dict) -> None:
     rules_json   = context.get("rules_json", "")
     scores_json  = context.get("scores_json", "")
 
-    # Business Plan & Tier 2 reports use capped versions — reflect that in estimates
+    # Business Plan & Tier 2 reports use capped versions -- reflect that in estimates
     bp_ctx = (
         idea + strategy[:2500] + finance[:2500] + marketing[:2000]
         + risk[:1500] + council_str[:1500] + reviewer[:1000] + critic[:1000]
@@ -117,17 +120,23 @@ def _log_prompt_token_estimates(context: dict) -> None:
     bmc_ctx     = idea + strategy[:2000] + finance[:2500] + marketing[:2000] + risk[:1500] + council_str[:1500]
     pestle_ctx  = idea + strategy[:2000] + risk[:2500] + council_str[:1500] + reviewer[:1000] + critic[:1000]
     porters_ctx = idea + strategy[:2500] + finance[:1500] + risk[:1500] + council_str[:1500] + critic[:1000]
+    comp_ctx    = idea + strategy[:2500] + marketing[:2000] + critic[:1000]
+    mktgtm_ctx  = idea + marketing + strategy[:2000] + finance[:2000] + council_str[:1500]
+    riskmat_ctx = idea + risk + critic + rules_json + council_str[:1500]
 
     print(
         "[Report Generator] Estimated input token counts per report type:\n"
-        f"  Executive Summary    : ~{_estimate_tokens(exec_ctx):,} tokens\n"
-        f"  SWOT Analysis        : ~{_estimate_tokens(swot_ctx):,} tokens\n"
-        f"  Financial Projection : ~{_estimate_tokens(fin_ctx):,} tokens\n"
-        f"  Investment Readiness : ~{_estimate_tokens(inv_ctx):,} tokens\n"
-        f"  Business Model Canvas: ~{_estimate_tokens(bmc_ctx):,} tokens\n"
-        f"  PESTLE Analysis      : ~{_estimate_tokens(pestle_ctx):,} tokens\n"
-        f"  Porter's Five Forces : ~{_estimate_tokens(porters_ctx):,} tokens\n"
-        f"  Business Plan (capped): ~{_estimate_tokens(bp_ctx):,} tokens  "
+        f"  Executive Summary                : ~{_estimate_tokens(exec_ctx):,} tokens\n"
+        f"  SWOT Analysis                    : ~{_estimate_tokens(swot_ctx):,} tokens\n"
+        f"  Financial Projection             : ~{_estimate_tokens(fin_ctx):,} tokens\n"
+        f"  Investment Readiness             : ~{_estimate_tokens(inv_ctx):,} tokens\n"
+        f"  Business Model Canvas            : ~{_estimate_tokens(bmc_ctx):,} tokens\n"
+        f"  PESTLE Analysis                  : ~{_estimate_tokens(pestle_ctx):,} tokens\n"
+        f"  Porter's Five Forces             : ~{_estimate_tokens(porters_ctx):,} tokens\n"
+        f"  Competitor Analysis              : ~{_estimate_tokens(comp_ctx):,} tokens\n"
+        f"  Marketing Plan & Go-To-Market    : ~{_estimate_tokens(mktgtm_ctx):,} tokens\n"
+        f"  Risk Assessment & Mitigation     : ~{_estimate_tokens(riskmat_ctx):,} tokens\n"
+        f"  Business Plan (capped)           : ~{_estimate_tokens(bp_ctx):,} tokens  "
         f"[raw uncapped: ~{_estimate_tokens(idea + strategy + finance + marketing + risk + council_str + reviewer + critic):,}]"
     )
 
@@ -140,7 +149,7 @@ def _coerce_schema_fields(report_content: dict, schema_class) -> dict:
     - str fields: convert nested dicts/lists to human-readable strings.
     - List[str] fields: convert dicts or list-of-dicts substructures to clean string lists.
     """
-    # ── 0. Unwrap Single Top-Level Key (e.g. {"PESTLE Analysis": {...}} or {"pestle": {...}}) ──
+    #  0. Unwrap Single Top-Level Key (e.g. {"PESTLE Analysis": {...}} or {"pestle": {...}}) 
     while isinstance(report_content, dict) and len(report_content) == 1:
         single_key = next(iter(report_content))
         inner_val = report_content[single_key]
@@ -176,7 +185,7 @@ def _coerce_schema_fields(report_content: dict, schema_class) -> dict:
                 print(f"[Report Generator] Normalizing key '{matched_key}' -> '{canonical_field}'")
                 report_content[canonical_field] = report_content.pop(matched_key)
 
-    # ── Key Alias Mapping ─────────────────────────────────────────────────
+    #  Key Alias Mapping 
     field_aliases = {
         "marketing_sales_strategy": [
             "marketing_strategy", "marketing_and_sales_strategy", "go_to_market_strategy",
@@ -187,6 +196,12 @@ def _coerce_schema_fields(report_content: dict, schema_class) -> dict:
         "operational_plan": ["operations_plan", "operational_roadmap", "operations_and_compliance"],
         "financial_plan": ["financial_projections", "financial_plan_and_pricing", "financials"],
         "risk_register": ["risks", "risk_register_and_mitigations", "risk_mitigation"],
+        "direct_competitors": ["competitors", "direct_competition", "main_competitors"],
+        "target_customer_profiles": ["icps", "customer_profiles", "ideal_customer_profiles", "target_customers"],
+        "outreach_acquisition_channels": ["acquisition_channels", "marketing_channels", "outreach_channels"],
+        "regulatory_compliance_risks": ["regulatory_risks", "compliance_risks", "legal_risks"],
+        "operational_technical_risks": ["operational_risks", "technical_risks", "technology_risks"],
+        "market_financial_risks": ["market_risks", "financial_risks"],
     }
     for canonical_field, aliases in field_aliases.items():
         if canonical_field not in report_content or not report_content[canonical_field]:
@@ -205,7 +220,7 @@ def _coerce_schema_fields(report_content: dict, schema_class) -> dict:
             continue
         val = report_content[field_name]
         annotation = field_info.annotation
-        # Resolve Optional[X] → X
+        # Resolve Optional[X] -> X
         origin = getattr(annotation, "__origin__", None)
         args = getattr(annotation, "__args__", ())
 
@@ -250,7 +265,7 @@ def _coerce_schema_fields(report_content: dict, schema_class) -> dict:
 
             elif isinstance(val, str):
                 lines = [
-                    line.lstrip("•-* ").strip()
+                    line.lstrip("-* ").strip()
                     for line in val.splitlines()
                     if line.strip()
                 ]
@@ -288,12 +303,12 @@ def _build_registry(context: dict) -> dict:
     # Each report type gets a focused prompt that foregrounds the data most
     # relevant to it, reducing token noise for the LLM.
 
-    # Business Plan input caps — applied before interpolation to bound the
-    # total input token count to ~3500–4500 tokens (vs a potential 8000+ with
+    # Business Plan input caps -- applied before interpolation to bound the
+    # total input token count to ~3500-4500 tokens (vs a potential 8000+ with
     # full agent outputs). Caps are generous enough to retain all key content
-    # from typical agent outputs (800–1500 tokens each). The Investment
+    # from typical agent outputs (800-1500 tokens each). The Investment
     # Readiness report already uses strategy[:1500] / finance[:1500] as the
-    # established pattern — Business Plan extends this to all 8 context fields.
+    # established pattern -- Business Plan extends this to all 8 context fields.
     bp_strategy    = strategy[:2500]
     bp_finance     = finance[:2500]
     bp_marketing   = marketing[:2000]
@@ -303,7 +318,7 @@ def _build_registry(context: dict) -> dict:
     bp_critic      = critic[:1000]
 
     return {
-        # ── 1. Executive Summary ────────────────────────────────────────────
+        #  1. Executive Summary 
         "Executive Summary": {
             "schema": ExecutiveSummarySchema,
             "export_formats": ["docx", "pptx", "pdf"],
@@ -349,13 +364,13 @@ CRITIC ADVERSARIAL NOTES:
 SCORES:
 {scores_json}
 
-Target JSON Format — return ONLY this block wrapped in ```json ... ```:
+Target JSON Format -- return ONLY this block wrapped in ```json ... ```:
 {{
   "concept": "Detailed venture overview: problem being solved, primary value proposition, and business model summary...",
   "market_opportunity": "ICP analysis, market sizing, competitive landscape, and research evidence supporting demand...",
   "strategic_positioning": "USPs, competitive moat, key marketing channels, and branding vectors...",
   "financial_projection_summary": "Revenue model with named tiers and EXACT numeric prices (e.g. Starter: $49/month), seed capital estimate, and funding overview...",
-  "risk_mitigation_summary": "Top 3–4 compliance/regulatory/competitive risks with specific mitigation steps...",
+  "risk_mitigation_summary": "Top 3-4 compliance/regulatory/competitive risks with specific mitigation steps...",
   "overall_score": {overall_score},
   "key_recommendations": [
     "Recommendation 1 drawn from Council or Reviewer...",
@@ -366,7 +381,7 @@ Target JSON Format — return ONLY this block wrapped in ```json ... ```:
 """,
         },
 
-        # ── 2. SWOT Analysis ────────────────────────────────────────────────
+        #  2. SWOT Analysis 
         "SWOT Analysis": {
             "schema": SwotAnalysisSchema,
             "export_formats": ["docx", "pptx", "pdf"],
@@ -399,7 +414,7 @@ CRITIC ADVERSARIAL NOTES:
 MARKETING PLAN:
 {marketing}
 
-Target JSON Format — return ONLY this block wrapped in ```json ... ```:
+Target JSON Format -- return ONLY this block wrapped in ```json ... ```:
 {{
   "strengths": [
     "Specific internal strength 1 grounded in strategy/research...",
@@ -425,7 +440,7 @@ Target JSON Format — return ONLY this block wrapped in ```json ... ```:
 """,
         },
 
-        # ── 3. Financial Projection ─────────────────────────────────────────
+        #  3. Financial Projection 
         "Financial Projection": {
             "schema": FinancialProjectionSchema,
             "export_formats": ["docx", "pdf"],
@@ -460,7 +475,7 @@ BUSINESS RULES VALIDATION RESULT:
 SCORES (focus on financial_soundness):
 {scores_json}
 
-Target JSON Format — return ONLY this block wrapped in ```json ... ```:
+Target JSON Format -- return ONLY this block wrapped in ```json ... ```:
 {{
   "revenue_model_details": "Named pricing tiers with EXACT numeric values (e.g. Starter: $49/month, Growth: $199/month, Enterprise: from $499/month). Breakdown of all revenue streams...",
   "pricing_sanity_check": "Assessment of competitive margin adequacy, customer WTP alignment, and any pricing consistency issues flagged by the Business Rules Engine...",
@@ -471,7 +486,7 @@ Target JSON Format — return ONLY this block wrapped in ```json ... ```:
 """,
         },
 
-        # ── 4. Investment Readiness Report ──────────────────────────────────
+        #  4. Investment Readiness Report 
         "Investment Readiness Report": {
             "schema": InvestmentReadinessSchema,
             "export_formats": ["docx", "pptx", "pdf"],
@@ -510,21 +525,21 @@ STRATEGY + FINANCE SUMMARY (for thesis grounding):
 Strategy: {strategy[:1500]}
 Finance: {finance[:1500]}
 
-Target JSON Format — return ONLY this block wrapped in ```json ... ```:
+Target JSON Format -- return ONLY this block wrapped in ```json ... ```:
 {{
   "investment_thesis": "Compelling thesis on why this venture is investable: market size, differentiation, timing, and team-market fit argument...",
   "scoring_breakdown": "Viability score X/100 (rationale), Market Fit score Y/100 (rationale), Financial Soundness score Z/100 (rationale). Weighted overall: {overall_score}/100...",
-  "critic_concerns": "Top 3–4 adversarial concerns the Critic raised, including assumptions challenged and strategic questions founders must answer convincingly...",
+  "critic_concerns": "Top 3-4 adversarial concerns the Critic raised, including assumptions challenged and strategic questions founders must answer convincingly...",
   "milestones_funding": "Phase 1/2/3 milestone targets, preferred funding instrument (pre-seed/seed/Series A), and capital allocation priorities by phase...",
   "rules_validation_summary": "Business Rules Engine outcome: [PASSED/FAILED]. Key findings: pricing consistency status, currency verification, any errors flagged..."
 }}
 """,
         },
 
-        # ── 5. Business Plan (last — heaviest report, 2-call split architecture) ──
+        #  5. Business Plan (last -- heaviest report, 2-call split architecture) 
         # Positioned last so the 4 lighter reports always complete first even
         # if Business Plan requires retry overhead. Input fields are capped
-        # (bp_* variables above) to keep input token count ≤ ~4500 tokens.
+        # (bp_* variables above) to keep input token count  ~4500 tokens.
         # max_tokens=8192 gives the 6-field output (5 prose + risk list)
         # genuine headroom; previously 4096 was marginal for this schema.
         # Generation is handled by _generate_business_plan_split() via the
@@ -571,7 +586,7 @@ REVIEWER NOTES (excerpt):
 CRITIC NOTES (excerpt):
 {bp_critic}
 
-Target JSON Format — return ONLY this block wrapped in ```json ... ```:
+Target JSON Format -- return ONLY this block wrapped in ```json ... ```:
 {{
   "company_description": "Strategic vision, mission statement, problem-solution alignment, and venture model details...",
   "market_analysis": "Industry landscape, direct/indirect competitor matrix, supplier/buyer power, TAM/SAM/SOM estimates...",
@@ -579,9 +594,9 @@ Target JSON Format — return ONLY this block wrapped in ```json ... ```:
   "operational_plan": "Execution milestones, critical partnerships, tech/security/privacy compliance checklist, legal requirements...",
   "financial_plan": "Revenue channels, EXACT pricing tier names and numeric values, break-even assumptions, capital burn rate...",
   "risk_register": [
-    "Risk 1: [Risk description] — Mitigation: [specific action]",
-    "Risk 2: [Risk description] — Mitigation: [specific action]",
-    "Risk 3: [Risk description] — Mitigation: [specific action]"
+    "Risk 1: [Risk description] -- Mitigation: [specific action]",
+    "Risk 2: [Risk description] -- Mitigation: [specific action]",
+    "Risk 3: [Risk description] -- Mitigation: [specific action]"
   ]
 }}
 """,
@@ -599,7 +614,7 @@ Target JSON Format — return ONLY this block wrapped in ```json ... ```:
             },
         },
 
-        # ── 6. Business Model Canvas ──────────────────────────────────────
+        #  6. Business Model Canvas 
         "Business Model Canvas": {
             "schema": BusinessModelCanvasSchema,
             "export_formats": ["docx", "pptx", "pdf"],
@@ -637,7 +652,7 @@ RISK ASSESSMENT:
 COUNCIL DEBATE NOTES:
 {council_str[:1500]}
 
-Target JSON Format — return ONLY this block wrapped in ```json ... ```:
+Target JSON Format -- return ONLY this block wrapped in ```json ... ```:
 {{
   "value_propositions": [
     "Core value proposition 1...",
@@ -672,7 +687,7 @@ Target JSON Format — return ONLY this block wrapped in ```json ... ```:
 """,
         },
 
-        # ── 7. PESTLE Analysis ─────────────────────────────────────────────
+        #  7. PESTLE Analysis 
         "PESTLE Analysis": {
             "schema": PestleAnalysisSchema,
             "export_formats": ["docx", "pptx", "pdf"],
@@ -689,9 +704,9 @@ Target JSON Format — return ONLY this block wrapped in ```json ... ```:
 Generate a structured PESTLE Analysis JSON covering macro-environmental drivers for this venture.
 Pull insight from Strategy, Risk, Rules Engine, and Critic assessments.
 
-CRITICAL: Return a JSON object with exactly these six top-level keys: political, economic, social, technological, legal, environmental — do not wrap the response in any outer object or key (such as "PESTLE Analysis" or "pestle"). Each of the six keys MUST contain a list of strings.
+CRITICAL: Return a JSON object with exactly these six top-level keys: political, economic, social, technological, legal, environmental -- do not wrap the response in any outer object or key (such as "PESTLE Analysis" or "pestle"). Each of the six keys MUST contain a list of strings.
 
-Target JSON Format — return ONLY this block wrapped in ```json ... ```:
+Target JSON Format -- return ONLY this block wrapped in ```json ... ```:
 {{
   "political": [
     "UK Environment Act 2021 mandates and Net-Zero 2050 targets...",
@@ -739,7 +754,7 @@ CRITIC ADVERSARIAL NOTES:
 """,
         },
 
-        # ── 8. Porter's Five Forces ─────────────────────────────────────────
+        #  8. Porter's Five Forces 
         "Porter's Five Forces": {
             "schema": PortersFiveForcesSchema,
             "export_formats": ["docx", "pptx", "pdf"],
@@ -773,7 +788,7 @@ COUNCIL DEBATE NOTES:
 CRITIC ADVERSARIAL NOTES:
 {critic[:1000]}
 
-Target JSON Format — return ONLY this block wrapped in ```json ... ```:
+Target JSON Format -- return ONLY this block wrapped in ```json ... ```:
 {{
   "threat_of_new_entrants": "Evaluation of barriers to entry, API complexity, capital needs, and brand moats...",
   "bargaining_power_of_buyers": "Evaluation of buyer price sensitivity, switching costs, and alternative options...",
@@ -781,6 +796,160 @@ Target JSON Format — return ONLY this block wrapped in ```json ... ```:
   "threat_of_substitutes": "Evaluation of manual spreadsheets, traditional consulting, and legacy software substitutes...",
   "competitive_rivalry": "Evaluation of incumbent competitor count, market growth rate, and rivalry intensity..."
 }}
+""",
+        },
+
+        # ── 9. Competitor Analysis ──────────────────────────────────────────
+        "Competitor Analysis": {
+            "schema": CompetitorAnalysisSchema,
+            "export_formats": ["docx", "pptx", "pdf"],
+            "max_tokens": 8192,
+            "export_mapping": {
+                "direct_competitors":      "Direct Competitors & Strengths/Weaknesses",
+                "indirect_competitors":    "Indirect Substitutes & Legacy Alternatives",
+                "competitive_advantages":  "Core Competitive Advantages & Moat",
+                "market_positioning":      "Strategic Market Positioning & Defense",
+            },
+            "system_prompt": f"""You are the Report Generator for AI Venture Studio.
+Generate a structured Competitor Analysis JSON evaluating the competitive landscape for this venture.
+Pull insight from Strategy, Research, Marketing, and Critic assessments.
+
+CRITICAL: Return a JSON object with exactly these four top-level keys: direct_competitors, indirect_competitors, competitive_advantages, market_positioning -- do not wrap the response in any outer object or key.
+
+Target JSON Format -- return ONLY this block wrapped in ```json ... ```:
+{{
+  "direct_competitors": [
+    "Direct competitor 1: key offerings, market share, strengths and weaknesses...",
+    "Direct competitor 2: pricing model and customer segment overlap..."
+  ],
+  "indirect_competitors": [
+    "Indirect substitute 1: manual Excel spreadsheets and internal compliance teams...",
+    "Indirect substitute 2: boutique sustainability consulting firms..."
+  ],
+  "competitive_advantages": [
+    "Proprietary API automation for direct utility data ingestion...",
+    "Tiered SME pricing model with significantly lower TCO..."
+  ],
+  "market_positioning": "Strategic positioning statement defining how the venture occupies the mid-market SME carbon compliance niche..."
+}}
+
+BUSINESS IDEA:
+{idea}
+
+STRATEGY ASSESSMENT:
+{strategy[:2500]}
+
+MARKETING PLAN:
+{marketing[:2000]}
+
+CRITIC ADVERSARIAL NOTES:
+{critic[:1000]}
+""",
+        },
+
+        #  10. Marketing Plan & Go-To-Market 
+        "Marketing Plan & Go-To-Market": {
+            "schema": MarketingGtmSchema,
+            "export_formats": ["docx", "pptx", "pdf"],
+            "max_tokens": 8192,
+            "export_mapping": {
+                "target_customer_profiles":      "Ideal Customer Profiles (ICPs)",
+                "outreach_acquisition_channels": "Customer Acquisition & Outreach Channels",
+                "brand_positioning_messaging":   "Brand Messaging & Value Proposition",
+                "growth_campaign_roadmap":       "Go-To-Market Growth Roadmap & Milestones",
+            },
+            "system_prompt": f"""You are the Report Generator for AI Venture Studio.
+Generate a structured Marketing Plan & Go-To-Market JSON outlining customer acquisition strategy.
+Pull insight from Marketing, Strategy, Finance, and Council debate notes.
+
+CRITICAL: Return a JSON object with exactly these four top-level keys: target_customer_profiles, outreach_acquisition_channels, brand_positioning_messaging, growth_campaign_roadmap -- do not wrap the response in any outer object or key.
+
+Target JSON Format -- return ONLY this block wrapped in ```json ... ```:
+{{
+  "target_customer_profiles": [
+    "ICP 1: UK-based SMEs (20-500 employees) subject to SECR/Environment Act reporting...",
+    "ICP 2: Sustainability officers and operations managers at mid-sized firms..."
+  ],
+  "outreach_acquisition_channels": [
+    "Digital inbound marketing: targeted LinkedIn and Google Ads campaigns...",
+    "Channel partnerships: utility providers and industry trade associations..."
+  ],
+  "brand_positioning_messaging": "Core brand positioning narrative establishing the venture as the most effortless, automated compliance partner for UK SMEs...",
+  "growth_campaign_roadmap": [
+    "Phase 1 (Months 1-6): Launch beta pilot with 50 UK SMEs, refine utility API integrations...",
+    "Phase 2 (Months 7-12): Scale inbound marketing and initiate trade body partnerships...",
+    "Phase 3 (Months 13-24): Expand enterprise tier and cross-border UK/EU compliance features..."
+  ]
+}}
+
+BUSINESS IDEA:
+{idea}
+
+MARKETING PLAN (primary source):
+{marketing}
+
+STRATEGY ASSESSMENT:
+{strategy[:2000]}
+
+FINANCE ASSESSMENT (pricing context):
+{finance[:2000]}
+
+COUNCIL DEBATE NOTES:
+{council_str[:1500]}
+""",
+        },
+
+        #  11. Risk Assessment & Mitigation Matrix 
+        "Risk Assessment & Mitigation Matrix": {
+            "schema": RiskAssessmentMatrixSchema,
+            "export_formats": ["docx", "pdf"],
+            "max_tokens": 8192,
+            "export_mapping": {
+                "regulatory_compliance_risks":     "Regulatory & Legal Compliance Risks",
+                "operational_technical_risks":     "Operational & Technological Risks",
+                "market_financial_risks":         "Market & Financial Risks",
+                "critic_adversarial_vulnerabilities": "Critic Adversarial Vulnerabilities & Action Items",
+            },
+            "system_prompt": f"""You are the Report Generator for AI Venture Studio.
+Generate a structured Risk Assessment & Mitigation Matrix JSON detailing risks and mitigations.
+Pull insight from Risk Agent, Critic Agent, Business Rules Engine, and Council debate notes.
+
+CRITICAL: Return a JSON object with exactly these four top-level keys: regulatory_compliance_risks, operational_technical_risks, market_financial_risks, critic_adversarial_vulnerabilities -- do not wrap the response in any outer object or key.
+
+Target JSON Format -- return ONLY this block wrapped in ```json ... ```:
+{{
+  "regulatory_compliance_risks": [
+    "Risk: Evolving UK SECR / Environment Act standards. Mitigation: Maintain continuous legal monitoring and modular compliance engine updates...",
+    "Risk: GDPR / Data Privacy exposure. Mitigation: Implement zero-trust architecture and automated PII anonymization..."
+  ],
+  "operational_technical_risks": [
+    "Risk: Utility provider API rate-limits or feed downtime. Mitigation: Asynchronous batch queueing and fallback manual upload processing...",
+    "Risk: Cloud infrastructure scaling bottlenecks. Mitigation: Serverless microservices architecture with auto-scaling database read-replicas..."
+  ],
+  "market_financial_risks": [
+    "Risk: SME budget contraction during macro inflation. Mitigation: Low-friction starter pricing tier (GBP 299/mo) with immediate ROI demonstration...",
+    "Risk: Incumbent software platform competitive response. Mitigation: Focus on specialized utility API integrations that generalist CRMs lack..."
+  ],
+  "critic_adversarial_vulnerabilities": [
+    "Vulnerability: Over-reliance on voluntary SME compliance adoption. Action Item: Target industries with mandatory SECR audit duties first...",
+    "Vulnerability: Customer acquisition cost (CAC) inflation. Action Item: Leverage utility partner co-marketing to reduce direct ad spend..."
+  ]
+}}
+
+BUSINESS IDEA:
+{idea}
+
+RISK ASSESSMENT (primary source):
+{risk}
+
+CRITIC ADVERSARIAL NOTES (primary source):
+{critic}
+
+BUSINESS RULES VALIDATION RESULT:
+{rules_json}
+
+COUNCIL DEBATE NOTES:
+{council_str[:1500]}
 """,
         },
     }
@@ -816,8 +985,8 @@ def _generate_business_plan_split(
     Generates the Business Plan in two sequential LLM calls instead of one.
 
     Splitting the 6-field Business Plan schema into two focused calls:
-      Call A — Company & Market  : company_description + market_analysis
-      Call B — Ops & Finance     : marketing_sales_strategy + operational_plan
+      Call A -- Company & Market  : company_description + market_analysis
+      Call B -- Ops & Finance     : marketing_sales_strategy + operational_plan
                                    + financial_plan + risk_register
 
     Each call uses at most half of the input context and targets 3 or fewer
@@ -837,7 +1006,7 @@ def _generate_business_plan_split(
 
     Raises:
         ValueError / json.JSONDecodeError: if either call fails after its
-        own repair retry — caller must handle.
+        own repair retry -- caller must handle.
     """
     idea        = bp_ctx["idea"]
     strategy    = bp_ctx["strategy"]
@@ -848,7 +1017,7 @@ def _generate_business_plan_split(
     reviewer    = bp_ctx["reviewer"]
     critic      = bp_ctx["critic"]
 
-    # ── Call A: Company Description + Market Analysis ─────────────────────
+    #  Call A: Company Description + Market Analysis 
     prompt_a = f"""You are the Report Generator for AI Venture Studio.
 Generate PART 1 of a Business Plan JSON covering company description and market analysis.
 CRITICAL: Return ONLY a JSON block containing EXACTLY both of these two required fields:
@@ -866,7 +1035,7 @@ FINANCE ASSESSMENT (for context):
 COUNCIL DEBATE NOTES:
 {council_str}
 
-Target JSON Format — return ONLY this block wrapped in ```json ... ```:
+Target JSON Format -- return ONLY this block wrapped in ```json ... ```:
 {{
   "company_description": "Strategic vision, mission statement, problem-solution alignment, and venture model details...",
   "market_analysis": "Industry landscape, direct/indirect competitor matrix, supplier/buyer power, TAM/SAM/SOM estimates..."
@@ -901,7 +1070,7 @@ Target JSON Format — return ONLY this block wrapped in ```json ... ```:
             raise ValueError(f"Business Plan Part A repair call failed: {repair_a['error']}")
         part_a = safe_parse_json(repair_a)
 
-    # ── Call B: Marketing, Ops, Finance & Risk ───────────────────────────
+    #  Call B: Marketing, Ops, Finance & Risk 
     prompt_b = f"""You are the Report Generator for AI Venture Studio.
 Generate PART 2 of a Business Plan JSON covering marketing/sales strategy,
 operational plan, financial plan, and risk register.
@@ -926,15 +1095,15 @@ REVIEWER NOTES:
 CRITIC NOTES:
 {critic}
 
-Target JSON Format — return ONLY this block wrapped in ```json ... ```:
+Target JSON Format -- return ONLY this block wrapped in ```json ... ```:
 {{
   "marketing_sales_strategy": "ICP persona definitions, customer acquisition pipeline, go-to-market channels, branding taglines...",
   "operational_plan": "Execution milestones, critical partnerships, tech/security/privacy compliance checklist, legal requirements...",
   "financial_plan": "Revenue channels, EXACT pricing tier names and numeric values, break-even assumptions, capital burn rate...",
   "risk_register": [
-    "Risk 1: [Risk description] — Mitigation: [specific action]",
-    "Risk 2: [Risk description] — Mitigation: [specific action]",
-    "Risk 3: [Risk description] — Mitigation: [specific action]"
+    "Risk 1: [Risk description] -- Mitigation: [specific action]",
+    "Risk 2: [Risk description] -- Mitigation: [specific action]",
+    "Risk 3: [Risk description] -- Mitigation: [specific action]"
   ]
 }}
 """
@@ -967,7 +1136,7 @@ Target JSON Format — return ONLY this block wrapped in ```json ... ```:
             raise ValueError(f"Business Plan Part B repair call failed: {repair_b['error']}")
         part_b = safe_parse_json(repair_b)
 
-    # ── Merge A + B into full Business Plan dict ──────────────────────────
+    #  Merge A + B into full Business Plan dict 
     part_a_clean = {k: v for k, v in part_a.items() if not k.startswith("_")}
     part_b_clean = {k: v for k, v in part_b.items() if not k.startswith("_")}
     
@@ -980,7 +1149,7 @@ Target JSON Format — return ONLY this block wrapped in ```json ... ```:
 
 
 # ---------------------------------------------------------------------------
-# JSON generation helper — routes Business Plan through split-call path
+# JSON generation helper -- routes Business Plan through split-call path
 # ---------------------------------------------------------------------------
 
 def _generate_report_json(
@@ -997,7 +1166,7 @@ def _generate_report_json(
       - Reduces both input and output token pressure per call.
       - Each sub-call has its own JSON repair retry.
       - On total failure of the split path, retries once with summarized
-        (800-char) context before giving up — the "retry-with-repair" path
+        (800-char) context before giving up -- the "retry-with-repair" path
         described in the task spec.
 
     For all other report types:
@@ -1018,7 +1187,7 @@ def _generate_report_json(
     max_tokens = config.get("max_tokens", 8192)
     preferred   = config.get("preferred_provider", "gemini")
 
-    # ── Business Plan: split-call path ───────────────────────────────────
+    #  Business Plan: split-call path 
     if report_type == "Business Plan":
         bp_ctx = config.get("_bp_context")
         if not bp_ctx:
@@ -1028,9 +1197,9 @@ def _generate_report_json(
                 "This is a configuration error in _build_registry()."
             )
 
-        # ── Split-call attempt ────────────────────────────────────────────
+        #  Split-call attempt 
         try:
-            print("[Report Generator] 'Business Plan' — using 2-call split architecture.")
+            print("[Report Generator] 'Business Plan' -- using 2-call split architecture.")
             return _generate_business_plan_split(
                 bp_ctx=bp_ctx,
                 project_id=project_id,
@@ -1039,12 +1208,12 @@ def _generate_report_json(
             )
         except Exception as split_err:
             print(
-                f"[Report Generator] 'Business Plan' — split-call path failed: {split_err}. "
+                f"[Report Generator] 'Business Plan' -- split-call path failed: {split_err}. "
                 f"Retrying with summarized (800-char) context..."
             )
 
-        # ── Context-reduced fallback retry ────────────────────────────────
-        # Truncate every field to 800 chars — worst-case the report will be
+        #  Context-reduced fallback retry 
+        # Truncate every field to 800 chars -- worst-case the report will be
         # less detailed, but it will complete rather than fail entirely.
         reduced_ctx = {
             "idea":        bp_ctx["idea"][:800],
@@ -1056,10 +1225,10 @@ def _generate_report_json(
             "reviewer":    bp_ctx["reviewer"][:400],
             "critic":      bp_ctx["critic"][:400],
         }
-        print("[Report Generator] 'Business Plan' — reduced-context retry: "
+        print("[Report Generator] 'Business Plan' -- reduced-context retry: "
               f"~{_estimate_tokens(''.join(reduced_ctx.values())):,} input tokens.")
-        # Each sub-call on reduced context gets 2048 tokens — plenty for
-        # shorter input → shorter expected output.
+        # Each sub-call on reduced context gets 2048 tokens -- plenty for
+        # shorter input -> shorter expected output.
         return _generate_business_plan_split(
             bp_ctx=reduced_ctx,
             project_id=project_id,
@@ -1069,7 +1238,7 @@ def _generate_report_json(
         )
         # If this also raises, it propagates to the caller's except clause.
 
-    # ── All other report types: standard single-call path ─────────────────
+    #  All other report types: standard single-call path 
 
     # Extract JSON schema if schema class is declared in config
     response_schema = None
@@ -1080,7 +1249,7 @@ def _generate_report_json(
             response_schema = None
 
     raw_text = None
-    # ── Attempt 1: normal generation ─────────────────────────────────────
+    #  Attempt 1: normal generation 
     try:
         raw_response = call_llm(
             prompt="Generate the report as instructed.",
@@ -1101,12 +1270,12 @@ def _generate_report_json(
 
     except Exception as first_err:
         print(
-            f"[Report Generator] '{report_type}' — Attempt 1 failed ({first_err})."
+            f"[Report Generator] '{report_type}' -- Attempt 1 failed ({first_err})."
         )
 
-    # ── Attempt 2: JSON repair retry (if Attempt 1 produced raw text) ────
+    #  Attempt 2: JSON repair retry (if Attempt 1 produced raw text) 
     if raw_text and isinstance(raw_text, str) and raw_text.strip():
-        print(f"[Report Generator] '{report_type}' — Attempting Attempt 2: JSON repair retry...")
+        print(f"[Report Generator] '{report_type}' -- Attempting Attempt 2: JSON repair retry...")
         try:
             cleaned = extract_json_block(raw_text)
             repair_prompt = JSON_REPAIR_PROMPT.format(malformed=cleaned[:6000])
@@ -1124,9 +1293,9 @@ def _generate_report_json(
             if not (isinstance(repaired_text, dict) and repaired_text.get("status") == "failed"):
                 return safe_parse_json(repaired_text)
         except Exception as repair_err:
-            print(f"[Report Generator] '{report_type}' — Attempt 2 JSON repair failed: {repair_err}.")
+            print(f"[Report Generator] '{report_type}' -- Attempt 2 JSON repair failed: {repair_err}.")
 
-    # ── Attempt 3: Reduced-Context Fallback Retry (Final Safety Net) ─────
+    #  Attempt 3: Reduced-Context Fallback Retry (Final Safety Net) 
     # Triggered if Attempt 1 and 2 failed, OR if full LLM provider exhaustion occurred (e.g. rate-limit failure)
     reduced_sys_prompt = None
     if reduced_config and "system_prompt" in reduced_config:
@@ -1135,7 +1304,7 @@ def _generate_report_json(
         reduced_sys_prompt = config["system_prompt"] + "\n\nCRITICAL: Keep response concise and complete. Ensure all JSON keys are present and valid."
 
     print(
-        f"[Report Generator] '{report_type}' — primary/repair attempts failed. "
+        f"[Report Generator] '{report_type}' -- primary/repair attempts failed. "
         f"Retrying with Attempt 3: reduced-context (800-char summarized context) fallback retry..."
     )
 
@@ -1158,7 +1327,7 @@ def _generate_report_json(
 
 def report_generator_node(state: AgentState) -> Dict[str, Any]:
     """
-    Report Generator Node — SKILL.md registry pattern.
+    Report Generator Node -- SKILL.md registry pattern.
 
     Generates 5 priority report types (Executive Summary, Business Plan, SWOT,
     Financial Projection, Investment Readiness) from validated pipeline output.
@@ -1167,7 +1336,7 @@ def report_generator_node(state: AgentState) -> Dict[str, Any]:
     - Only runs after Business Rules Engine has validated the pipeline output.
     - If pipeline_aborted is True, skips all generation and records failure status.
     - Each report type is fully specified by its registry entry (schema + prompt + mapping).
-    - Per-report success/failure is tracked independently — one failure does not block others.
+    - Per-report success/failure is tracked independently -- one failure does not block others.
     - All results (success and failure) are upserted to public.reports in Supabase.
     """
     project_id       = state.get("project_id")
@@ -1183,14 +1352,14 @@ def report_generator_node(state: AgentState) -> Dict[str, Any]:
 
     supabase = get_supabase_client()
 
-    # ── Early-exit: pipeline aborted upstream ─────────────────────────────
+    #  Early-exit: pipeline aborted upstream 
     if state.get("pipeline_aborted"):
         abort_reason = state.get("abort_reason", "Upstream pipeline failure.")
-        print(f"[Report Generator] Skipping — pipeline aborted: {abort_reason}")
+        print(f"[Report Generator] Skipping -- pipeline aborted: {abort_reason}")
         _record_pipeline_abort(supabase, project_id, abort_reason, scores)
         return {"final_report": f"# Report Generation Skipped\n\nPipeline aborted: {abort_reason}"}
 
-    # ── Assemble shared context values ────────────────────────────────────
+    #  Assemble shared context values 
     strategy    = outputs.get("strategy", "No strategy assessment available.")
     finance     = outputs.get("finance", "No finance assessment available.")
     marketing   = outputs.get("marketing", "No marketing plan available.")
@@ -1227,26 +1396,26 @@ def report_generator_node(state: AgentState) -> Dict[str, Any]:
         "overall_score": overall_score,
     }
 
-    # ── Build the registry with interpolated prompts ───────────────────────
+    #  Build the registry with interpolated prompts 
     registry = _build_registry(context)
     reduced_registry = _build_registry(reduced_context)
 
-    # ── Log estimated input token counts (diagnostic) ─────────────────────
+    #  Log estimated input token counts (diagnostic) 
     _log_prompt_token_estimates(context)
 
     generated_reports: Dict[str, dict] = {}
     success_count = 0
     failure_count = 0
 
-    # ── Check Business Rules Engine validation status ────────────────────
+    #  Check Business Rules Engine validation status 
     rules_valid = rules_validation.get("is_valid", True)
     validation_warning_msg = None
     if not rules_valid:
         errors_list = rules_validation.get("errors", ["Validation found inconsistencies"])
-        validation_warning_msg = f"Pricing Data Inconsistency — Financial figures may be unaligned ({', '.join(errors_list)})"
+        validation_warning_msg = f"Pricing Data Inconsistency -- Financial figures may be unaligned ({', '.join(errors_list)})"
         print(f"[Report Generator] WARNING: {validation_warning_msg}. Proceeding with report generation and attaching warning banner.")
 
-    # ── Generate each report type via the registry ────────────────────────
+    #  Generate each report type via the registry 
     for report_type, config in registry.items():
         print(f"[Report Generator] Generating: '{report_type}'...")
         reduced_config = reduced_registry.get(report_type)
@@ -1287,20 +1456,20 @@ def report_generator_node(state: AgentState) -> Dict[str, Any]:
 
             generated_reports[report_type] = report_content_clean
             success_count += 1
-            print(f"[Report Generator] '{report_type}' — OK")
+            print(f"[Report Generator] '{report_type}' -- OK")
 
         except Exception as err:
             failure_count += 1
             error_msg = str(err)
-            print(f"[Report Generator] '{report_type}' — FAILED: {error_msg}")
+            print(f"[Report Generator] '{report_type}' -- FAILED: {error_msg}")
             fallback_content = {"error": f"Report generation failed: {error_msg}"}
             generated_reports[report_type] = fallback_content
             _upsert_report(supabase, project_id, report_type, fallback_content, scores, "Failed")
 
-    # ── Build final_report text summary ───────────────────────────────────
+    #  Build final_report text summary 
     final_report_str = _build_final_report_text(project_id, generated_reports, registry)
 
-    # ── Log execution to agent_logs ───────────────────────────────────────
+    #  Log execution to agent_logs 
     try:
         supabase.table("agent_logs").insert({
             "project_id": project_id,
@@ -1320,7 +1489,7 @@ def report_generator_node(state: AgentState) -> Dict[str, Any]:
         print(f"Supabase Agent Log Sync Warning for Report Generator: {str(db_err)}")
 
     print(
-        f"--- [Report Generator Node] Finished — "
+        f"--- [Report Generator Node] Finished -- "
         f"{success_count}/{success_count + failure_count} reports generated ---"
     )
     return {"final_report": final_report_str, "generated_reports": generated_reports}
@@ -1383,7 +1552,7 @@ def _record_pipeline_abort(supabase, project_id: str, abort_reason: str, scores:
             supabase,
             project_id,
             report_type,
-            {"error": f"Pipeline aborted upstream — {abort_reason}"},
+            {"error": f"Pipeline aborted upstream -- {abort_reason}"},
             scores,
             "Failed",
         )

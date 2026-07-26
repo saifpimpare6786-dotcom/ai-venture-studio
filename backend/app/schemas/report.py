@@ -317,3 +317,71 @@ class PortersFiveForcesSchema(ReportSchemaBase):
         description="Evaluation of industry growth rate, number/strength of direct competitors, and market saturation."
     )
 
+
+class CompetitorAnalysisSchema(ReportSchemaBase):
+    """
+    Detailed competitive matrix and market positioning evaluation.
+    Export formats: DOCX, PPTX, PDF
+    """
+    direct_competitors: List[str] = Field(
+        description="Main direct competitors, their core capabilities, market share, strengths, and weaknesses.",
+        min_length=1
+    )
+    indirect_competitors: List[str] = Field(
+        description="Indirect substitutes, legacy manual workarounds, and alternative product categories.",
+        min_length=1
+    )
+    competitive_advantages: List[str] = Field(
+        description="Core moat, unique selling propositions (USPs), proprietary tech, or pricing advantages.",
+        min_length=1
+    )
+    market_positioning: str = Field(
+        description="Strategic niche placement, target pricing tier justification, and defensive moat summary."
+    )
+
+
+class MarketingGtmSchema(ReportSchemaBase):
+    """
+    Go-to-market strategy, ideal customer profiles, and acquisition channel mix.
+    Export formats: DOCX, PPTX, PDF
+    """
+    target_customer_profiles: List[str] = Field(
+        description="Ideal Customer Profiles (ICPs), buyer personas, firmographic criteria, and pain points.",
+        min_length=1
+    )
+    outreach_acquisition_channels: List[str] = Field(
+        description="Primary customer acquisition pipelines, digital marketing channels, partner networks, and sales mix.",
+        min_length=1
+    )
+    brand_positioning_messaging: str = Field(
+        description="Core brand messaging hierarchy, tagline vectors, value proposition, and customer messaging strategy."
+    )
+    growth_campaign_roadmap: List[str] = Field(
+        description="Phase 1, Phase 2, Phase 3 customer growth milestones, promotional campaigns, and expansion metrics.",
+        min_length=1
+    )
+
+
+class RiskAssessmentMatrixSchema(ReportSchemaBase):
+    """
+    Comprehensive risk register covering regulatory, operational, market, and adversarial vulnerabilities.
+    Export formats: DOCX, PDF
+    """
+    regulatory_compliance_risks: List[str] = Field(
+        description="Regulatory hurdles, legal compliance, data privacy (GDPR), SECR laws, and mitigation plans.",
+        min_length=1
+    )
+    operational_technical_risks: List[str] = Field(
+        description="Operational bottlenecks, API integration dependencies, cloud security, and tech mitigations.",
+        min_length=1
+    )
+    market_financial_risks: List[str] = Field(
+        description="Market acceptance, buyer price sensitivity, capital runway constraints, and financial mitigations.",
+        min_length=1
+    )
+    critic_adversarial_vulnerabilities: List[str] = Field(
+        description="Core vulnerabilities identified by Critic Agent / Council debate and founder action items.",
+        min_length=1
+    )
+
+
