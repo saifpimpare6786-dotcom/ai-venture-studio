@@ -21,6 +21,9 @@ from app.schemas.report import (
     SwotAnalysisSchema,
     FinancialProjectionSchema,
     InvestmentReadinessSchema,
+    BusinessModelCanvasSchema,
+    PestleAnalysisSchema,
+    PortersFiveForcesSchema,
 )
 
 
@@ -102,15 +105,18 @@ def _log_prompt_token_estimates(context: dict) -> None:
     rules_json   = context.get("rules_json", "")
     scores_json  = context.get("scores_json", "")
 
-    # Business Plan uses capped versions — reflect that in the estimate
+    # Business Plan & Tier 2 reports use capped versions — reflect that in estimates
     bp_ctx = (
         idea + strategy[:2500] + finance[:2500] + marketing[:2000]
         + risk[:1500] + council_str[:1500] + reviewer[:1000] + critic[:1000]
     )
-    exec_ctx  = idea + strategy + finance + marketing + risk + council_str + reviewer + critic + scores_json
-    swot_ctx  = idea + strategy + risk + council_str + critic + marketing
-    fin_ctx   = idea + finance + strategy + marketing + rules_json + scores_json
-    inv_ctx   = idea + scores_json + critic + reviewer + council_str + rules_json + strategy[:1500] + finance[:1500]
+    exec_ctx    = idea + strategy + finance + marketing + risk + council_str + reviewer + critic + scores_json
+    swot_ctx    = idea + strategy + risk + council_str + critic + marketing
+    fin_ctx     = idea + finance + strategy + marketing + rules_json + scores_json
+    inv_ctx     = idea + scores_json + critic + reviewer + council_str + rules_json + strategy[:1500] + finance[:1500]
+    bmc_ctx     = idea + strategy[:2000] + finance[:2500] + marketing[:2000] + risk[:1500] + council_str[:1500]
+    pestle_ctx  = idea + strategy[:2000] + risk[:2500] + council_str[:1500] + reviewer[:1000] + critic[:1000]
+    porters_ctx = idea + strategy[:2500] + finance[:1500] + risk[:1500] + council_str[:1500] + critic[:1000]
 
     print(
         "[Report Generator] Estimated input token counts per report type:\n"
@@ -118,6 +124,9 @@ def _log_prompt_token_estimates(context: dict) -> None:
         f"  SWOT Analysis        : ~{_estimate_tokens(swot_ctx):,} tokens\n"
         f"  Financial Projection : ~{_estimate_tokens(fin_ctx):,} tokens\n"
         f"  Investment Readiness : ~{_estimate_tokens(inv_ctx):,} tokens\n"
+        f"  Business Model Canvas: ~{_estimate_tokens(bmc_ctx):,} tokens\n"
+        f"  PESTLE Analysis      : ~{_estimate_tokens(pestle_ctx):,} tokens\n"
+        f"  Porter's Five Forces : ~{_estimate_tokens(porters_ctx):,} tokens\n"
         f"  Business Plan (capped): ~{_estimate_tokens(bp_ctx):,} tokens  "
         f"[raw uncapped: ~{_estimate_tokens(idea + strategy + finance + marketing + risk + council_str + reviewer + critic):,}]"
     )
@@ -533,6 +542,183 @@ Target JSON Format — return ONLY this block wrapped in ```json ... ```:
                 "reviewer": bp_reviewer,
                 "critic": bp_critic,
             },
+        },
+
+        # ── 6. Business Model Canvas ──────────────────────────────────────
+        "Business Model Canvas": {
+            "schema": BusinessModelCanvasSchema,
+            "export_formats": ["docx", "pptx", "pdf"],
+            "max_tokens": 8192,
+            "export_mapping": {
+                "value_propositions":     "Value Propositions",
+                "customer_segments":      "Customer Segments",
+                "channels":               "Channels & Distribution",
+                "customer_relationships": "Customer Relationships",
+                "revenue_streams":        "Revenue Streams & Pricing Tiers",
+                "key_resources":           "Key Resources",
+                "key_activities":          "Key Activities",
+                "key_partnerships":        "Key Partnerships",
+                "cost_structure":         "Cost Structure",
+            },
+            "system_prompt": f"""You are the Report Generator for AI Venture Studio.
+Generate a structured Business Model Canvas JSON (9 building blocks) for this venture.
+Pull insight from ALL agent outputs, Council debate, Reviewer briefing, and Critic notes.
+
+BUSINESS IDEA:
+{idea}
+
+STRATEGY ASSESSMENT:
+{strategy[:2000]}
+
+FINANCE ASSESSMENT:
+{finance[:2500]}
+
+MARKETING PLAN:
+{marketing[:2000]}
+
+RISK ASSESSMENT:
+{risk[:1500]}
+
+COUNCIL DEBATE NOTES:
+{council_str[:1500]}
+
+Target JSON Format — return ONLY this block wrapped in ```json ... ```:
+{{
+  "value_propositions": [
+    "Core value proposition 1...",
+    "Core value proposition 2..."
+  ],
+  "customer_segments": [
+    "Target segment 1 (e.g. UK SMEs 20-500 employees)...",
+    "Target segment 2..."
+  ],
+  "channels": [
+    "Direct sales, digital marketing, utility provider integrations..."
+  ],
+  "customer_relationships": [
+    "Self-service onboarding, dedicated customer success for enterprise..."
+  ],
+  "revenue_streams": [
+    "Tiered subscription model (Starter, Growth, Enterprise with numeric pricing)..."
+  ],
+  "key_resources": [
+    "Utility API connection framework, automated emissions calculation engine..."
+  ],
+  "key_activities": [
+    "Platform engineering, compliance audit automation, utility integration management..."
+  ],
+  "key_partnerships": [
+    "Utility providers, industry compliance bodies, sustainability auditors..."
+  ],
+  "cost_structure": [
+    "R&D / engineering salaries, API infrastructure, customer acquisition..."
+  ]
+}}
+""",
+        },
+
+        # ── 7. PESTLE Analysis ─────────────────────────────────────────────
+        "PESTLE Analysis": {
+            "schema": PestleAnalysisSchema,
+            "export_formats": ["docx", "pptx", "pdf"],
+            "max_tokens": 8192,
+            "export_mapping": {
+                "political":     "Political Factors",
+                "economic":      "Economic Factors",
+                "social":        "Social & Demographic Factors",
+                "technological": "Technological Factors",
+                "legal":         "Legal & Regulatory Factors",
+                "environmental": "Environmental Factors",
+            },
+            "system_prompt": f"""You are the Report Generator for AI Venture Studio.
+Generate a structured PESTLE Analysis JSON covering macro-environmental drivers for this venture.
+Pull insight from Strategy, Risk, Rules Engine, and Critic assessments.
+
+BUSINESS IDEA:
+{idea}
+
+STRATEGY ASSESSMENT:
+{strategy[:2000]}
+
+RISK ASSESSMENT:
+{risk[:2500]}
+
+COUNCIL DEBATE NOTES:
+{council_str[:1500]}
+
+REVIEWER BRIEFING:
+{reviewer[:1000]}
+
+CRITIC ADVERSARIAL NOTES:
+{critic[:1000]}
+
+Target JSON Format — return ONLY this block wrapped in ```json ... ```:
+{{
+  "political": [
+    "Government sustainability policies, net-zero mandates, subsidies..."
+  ],
+  "economic": [
+    "Macro inflation, SME budget constraints, capital requirements..."
+  ],
+  "social": [
+    "Corporate ESG consciousness, buyer sustainability preferences..."
+  ],
+  "technological": [
+    "Utility API availability, SaaS automation, cloud security standards..."
+  ],
+  "legal": [
+    "Environment Act compliance, SECR disclosure laws, GDPR / data privacy..."
+  ],
+  "environmental": [
+    "Carbon accounting mandates, Scope 1-3 reporting rules, climate goals..."
+  ]
+}}
+""",
+        },
+
+        # ── 8. Porter's Five Forces ─────────────────────────────────────────
+        "Porter's Five Forces": {
+            "schema": PortersFiveForcesSchema,
+            "export_formats": ["docx", "pptx", "pdf"],
+            "max_tokens": 8192,
+            "export_mapping": {
+                "threat_of_new_entrants":        "Threat of New Entrants",
+                "bargaining_power_of_buyers":    "Bargaining Power of Buyers",
+                "bargaining_power_of_suppliers": "Bargaining Power of Suppliers",
+                "threat_of_substitutes":        "Threat of Substitutes",
+                "competitive_rivalry":          "Competitive Rivalry Among Existing Players",
+            },
+            "system_prompt": f"""You are the Report Generator for AI Venture Studio.
+Generate a structured Porter's Five Forces analysis JSON evaluating industry competitive dynamics.
+Pull insight from Strategy, Finance, Risk, Council, and Critic assessments.
+
+BUSINESS IDEA:
+{idea}
+
+STRATEGY ASSESSMENT:
+{strategy[:2500]}
+
+FINANCE ASSESSMENT:
+{finance[:1500]}
+
+RISK ASSESSMENT:
+{risk[:1500]}
+
+COUNCIL DEBATE NOTES:
+{council_str[:1500]}
+
+CRITIC ADVERSARIAL NOTES:
+{critic[:1000]}
+
+Target JSON Format — return ONLY this block wrapped in ```json ... ```:
+{{
+  "threat_of_new_entrants": "Evaluation of barriers to entry, API complexity, capital needs, and brand moats...",
+  "bargaining_power_of_buyers": "Evaluation of buyer price sensitivity, switching costs, and alternative options...",
+  "bargaining_power_of_suppliers": "Evaluation of utility API supplier lock-in, data access costs, and provider dependencies...",
+  "threat_of_substitutes": "Evaluation of manual spreadsheets, traditional consulting, and legacy software substitutes...",
+  "competitive_rivalry": "Evaluation of incumbent competitor count, market growth rate, and rivalry intensity..."
+}}
+""",
         },
     }
 
@@ -1034,7 +1220,8 @@ def report_generator_node(state: AgentState) -> Dict[str, Any]:
         f"--- [Report Generator Node] Finished — "
         f"{success_count}/{success_count + failure_count} reports generated ---"
     )
-    return {"final_report": final_report_str}
+    return {"final_report": final_report_str, "generated_reports": generated_reports}
+
 
 
 # ---------------------------------------------------------------------------
@@ -1084,6 +1271,9 @@ def _record_pipeline_abort(supabase, project_id: str, abort_reason: str, scores:
         "SWOT Analysis",
         "Financial Projection",
         "Investment Readiness Report",
+        "Business Model Canvas",
+        "PESTLE Analysis",
+        "Porter's Five Forces",
     ]
     for report_type in registry_keys:
         _upsert_report(

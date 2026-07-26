@@ -459,57 +459,29 @@ def run_phase3_test():
     # ── 13b. Validate Executive Summary against Pydantic schema ───────────
     subsection("13b — Executive Summary Pydantic schema validation")
 
-    # The node writes all reports to Supabase and returns a Markdown summary
-    # string. For schema validation we reconstruct the Executive Summary JSON
-    # from the registry using the same context the node used, then validate it.
-    # This mirrors what the node does internally and lets us inspect the raw
-    # structured object.
-
-    safe_print("\nAttempting to extract Executive Summary JSON from report_generator output...")
-
-    # Re-run just the Executive Summary LLM call and capture raw JSON
+    # Capture the raw Executive Summary JSON produced during Step 13's actual execution
+    # directly from report_generator_node outputs (or database fallback).
     import json as _json
-    from services.llm import call_llm
-    from app.pipeline.report_generator import extract_json_block
 
-    context = {
-        "idea":        mock_state["business_idea_input"],
-        "strategy":    mock_state["specialized_outputs"].get("strategy", ""),
-        "finance":     mock_state["specialized_outputs"].get("finance", ""),
-        "marketing":   mock_state["specialized_outputs"].get("marketing", ""),
-        "risk":        mock_state["specialized_outputs"].get("risk", ""),
-        "council_str": "\n---\n".join(mock_state["council_feedback"])
-                       if mock_state["council_feedback"] else "No council feedback.",
-        "reviewer":    mock_state["reviewer_notes"],
-        "critic":      mock_state["critic_notes"],
-        "rules_json":  _json.dumps(mock_state["rules_validation_result"], indent=2),
-        "scores_json": _json.dumps(mock_state["scores"], indent=2),
-        "overall_score": mock_state["scores"].get("overall_score", 0.0),
-    }
+    generated_reports = rpt_out.get("generated_reports", {})
+    report_content = generated_reports.get("Executive Summary", {})
 
-    registry = _build_registry(context)
-    exec_config = registry["Executive Summary"]
-
-    safe_print("\nCalling Gemini to generate Executive Summary for schema validation...")
-    raw_text = call_llm(
-        prompt="Generate the report as instructed.",
-        system_prompt=exec_config["system_prompt"],
-        preferred_provider="gemini",
-        project_id=project_id,
-        agent_name="Executive Summary Generator [Phase 3 Test]",
-    )
+    if not report_content and supabase:
+        try:
+            db_res = supabase.table("reports").select("content").eq("project_id", project_id).eq("report_type", "Executive Summary").execute()
+            if db_res.data:
+                report_content = db_res.data[0].get("content") or {}
+        except Exception:
+            pass
 
     validation_passed = False
     validation_errors = []
-    report_content    = {}
 
-    if isinstance(raw_text, dict) and raw_text.get("status") == "failed":
-        safe_print(f"\n[VALIDATION] LLM call failed: {raw_text.get('error')}")
+    if not report_content or "error" in report_content:
+        safe_print(f"\n[VALIDATION] Executive Summary content missing or failed: {report_content.get('error', 'No content')}")
     else:
         try:
-            cleaned = extract_json_block(raw_text)
-            report_content = _json.loads(cleaned)
-            safe_print("\n[Raw JSON extracted from LLM response]:")
+            safe_print("\n[Raw JSON captured from Step 13 Executive Summary output]:")
             safe_print(_json.dumps(report_content, indent=2, ensure_ascii=False))
 
             # Coerce types before Pydantic validation
@@ -519,14 +491,14 @@ def run_phase3_test():
             validated = ExecutiveSummarySchema.model_validate(report_content)
             validation_passed = True
 
-        except _json.JSONDecodeError as je:
-            validation_errors.append(f"JSON parse error: {je}")
-            safe_print(f"\n[RAW LLM output that failed JSON parse]:\n{raw_text}")
         except ValidationError as ve:
             for err in ve.errors():
                 msg = err.get("msg", "Unknown error")
                 loc = " -> ".join(str(l) for l in err.get("loc", []))
                 validation_errors.append(f"{loc}: {msg}")
+        except Exception as ex:
+            validation_errors.append(f"Validation error: {ex}")
+
 
     # ── 13c. Print validation result ──────────────────────────────────────
     subsection("13c — Validation Result")

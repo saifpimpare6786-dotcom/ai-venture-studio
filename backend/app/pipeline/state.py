@@ -37,4 +37,6 @@ class AgentState(TypedDict):
     rules_validation_result: Dict[str, Any]
     scores: Dict[str, Any]
     final_report: str
+    generated_reports: NotRequired[Dict[str, Any]]
     force_refresh: NotRequired[bool]
+
