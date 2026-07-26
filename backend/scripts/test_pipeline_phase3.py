@@ -517,7 +517,7 @@ def run_phase3_test():
             safe_print(f"    - {err}")
 
     # ── Final summary ─────────────────────────────────────────────────────
-    section("Full Report Suite (11 Reports) Test Complete")
+    section("Full Report Suite (13 Reports) Test Complete")
     rules_ok  = mock_state["rules_validation_result"].get("is_valid", False)
     score_val = mock_state["scores"].get("overall_score", "N/A")
     safe_print(f"  Business Rules validation : {'PASSED' if rules_ok else 'FAILED'}")

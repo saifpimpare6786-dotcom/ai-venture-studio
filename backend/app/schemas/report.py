@@ -385,3 +385,49 @@ class RiskAssessmentMatrixSchema(ReportSchemaBase):
     )
 
 
+class EsgSustainabilitySchema(ReportSchemaBase):
+    """
+    ESG framework, carbon auditing roadmap, and sustainability compliance guidelines.
+    Export formats: DOCX, PPTX, PDF
+    """
+    environmental_impact_metrics: List[str] = Field(
+        description="Scope 1, 2, and 3 carbon emission metrics, energy efficiency goals, and environmental targets.",
+        min_length=1
+    )
+    social_governance_frameworks: List[str] = Field(
+        description="Social impact initiatives, stakeholder engagement, ethical supply chain governance, and board oversight.",
+        min_length=1
+    )
+    regulatory_esg_compliance: List[str] = Field(
+        description="UK Environment Act 2021, SECR disclosures, EU CSRD standards, and ESG compliance audit readiness.",
+        min_length=1
+    )
+    sustainability_roadmap: List[str] = Field(
+        description="Phase 1, Phase 2, Phase 3 ESG implementation milestones, green certifications, and net-zero targets.",
+        min_length=1
+    )
+
+
+class PitchSummaryDeckSchema(ReportSchemaBase):
+    """
+    Elevator pitch, slide deck structure, investment highlights, and capital allocation breakdown.
+    Export formats: DOCX, PPTX, PDF
+    """
+    elevator_pitch_summary: str = Field(
+        description="Concise 2-3 sentence elevator pitch summarizing thesis, problem, solution, TAM, and traction."
+    )
+    slide_deck_outline: List[str] = Field(
+        description="Structured 10-12 slide pitch deck outline (Problem, Solution, Market, Product, Business Model, Traction, Competition, Financials, Team, Ask).",
+        min_length=1
+    )
+    key_investment_highlights: List[str] = Field(
+        description="Top 3-5 core reasons investors should back this venture (moat, unit economics, regulatory tailwinds).",
+        min_length=1
+    )
+    use_of_funds_breakdown: List[str] = Field(
+        description="Clear percentage capital allocation across Product R&D, Sales/GTM, Compliance/Legal, and Working Capital.",
+        min_length=1
+    )
+
+
+

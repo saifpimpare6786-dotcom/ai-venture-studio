@@ -27,6 +27,8 @@ from app.schemas.report import (
     CompetitorAnalysisSchema,
     MarketingGtmSchema,
     RiskAssessmentMatrixSchema,
+    EsgSustainabilitySchema,
+    PitchSummaryDeckSchema,
 )
 
 
@@ -84,7 +86,7 @@ def safe_parse_json(raw_text: str) -> dict:
 # ---------------------------------------------------------------------------
 
 def _estimate_tokens(text: str) -> int:
-    """Rough token estimate: 1 token  4 characters (industry standard heuristic)."""
+    """Rough token estimate: 1 token approx 4 characters (industry standard heuristic)."""
     return max(1, len(text) // 4)
 
 
@@ -123,6 +125,8 @@ def _log_prompt_token_estimates(context: dict) -> None:
     comp_ctx    = idea + strategy[:2500] + marketing[:2000] + critic[:1000]
     mktgtm_ctx  = idea + marketing + strategy[:2000] + finance[:2000] + council_str[:1500]
     riskmat_ctx = idea + risk + critic + rules_json + council_str[:1500]
+    esg_ctx     = idea + risk[:2500] + strategy[:2000] + rules_json
+    pitch_ctx   = idea + strategy[:2500] + finance[:2500] + marketing[:2000] + scores_json
 
     print(
         "[Report Generator] Estimated input token counts per report type:\n"
@@ -136,6 +140,8 @@ def _log_prompt_token_estimates(context: dict) -> None:
         f"  Competitor Analysis              : ~{_estimate_tokens(comp_ctx):,} tokens\n"
         f"  Marketing Plan & Go-To-Market    : ~{_estimate_tokens(mktgtm_ctx):,} tokens\n"
         f"  Risk Assessment & Mitigation     : ~{_estimate_tokens(riskmat_ctx):,} tokens\n"
+        f"  ESG & Sustainability             : ~{_estimate_tokens(esg_ctx):,} tokens\n"
+        f"  Pitch Summary & Investor Deck    : ~{_estimate_tokens(pitch_ctx):,} tokens\n"
         f"  Business Plan (capped)           : ~{_estimate_tokens(bp_ctx):,} tokens  "
         f"[raw uncapped: ~{_estimate_tokens(idea + strategy + finance + marketing + risk + council_str + reviewer + critic):,}]"
     )
@@ -202,6 +208,13 @@ def _coerce_schema_fields(report_content: dict, schema_class) -> dict:
         "regulatory_compliance_risks": ["regulatory_risks", "compliance_risks", "legal_risks"],
         "operational_technical_risks": ["operational_risks", "technical_risks", "technology_risks"],
         "market_financial_risks": ["market_risks", "financial_risks"],
+        "environmental_impact_metrics": ["environmental_metrics", "carbon_impact_metrics", "environmental_impact"],
+        "social_governance_frameworks": ["social_governance", "esg_frameworks", "governance_frameworks"],
+        "regulatory_esg_compliance": ["esg_compliance", "regulatory_compliance"],
+        "elevator_pitch_summary": ["elevator_pitch", "pitch_summary", "executive_pitch"],
+        "slide_deck_outline": ["deck_outline", "pitch_deck_outline", "slides_outline"],
+        "key_investment_highlights": ["investment_highlights", "key_highlights", "investor_highlights"],
+        "use_of_funds_breakdown": ["use_of_funds", "funds_breakdown", "capital_allocation"],
     }
     for canonical_field, aliases in field_aliases.items():
         if canonical_field not in report_content or not report_content[canonical_field]:
@@ -950,6 +963,120 @@ BUSINESS RULES VALIDATION RESULT:
 
 COUNCIL DEBATE NOTES:
 {council_str[:1500]}
+""",
+        },
+
+        # ── 12. ESG & Sustainability Recommendations ───────────────────────
+        "ESG & Sustainability Recommendations": {
+            "schema": EsgSustainabilitySchema,
+            "export_formats": ["docx", "pptx", "pdf"],
+            "max_tokens": 8192,
+            "export_mapping": {
+                "environmental_impact_metrics": "Environmental & Carbon Emission Impact",
+                "social_governance_frameworks": "Social Impact & Governance Frameworks",
+                "regulatory_esg_compliance":    "Regulatory ESG Compliance & Audit Readiness",
+                "sustainability_roadmap":       "Sustainability Implementation Roadmap",
+            },
+            "system_prompt": f"""You are the Report Generator for AI Venture Studio.
+Generate a structured ESG & Sustainability Recommendations JSON detailing environmental targets and compliance frameworks.
+Pull insight from Risk Agent, Strategy Agent, Business Rules Engine, and Council notes.
+
+CRITICAL: Return a JSON object with exactly these four top-level keys: environmental_impact_metrics, social_governance_frameworks, regulatory_esg_compliance, sustainability_roadmap -- do not wrap the response in any outer object or key.
+
+Target JSON Format -- return ONLY this block wrapped in ```json ... ```:
+{{
+  "environmental_impact_metrics": [
+    "Scope 1 & Scope 2 direct emission reduction via automated utility data tracking...",
+    "Scope 3 supply chain carbon accounting automation for UK SMEs..."
+  ],
+  "social_governance_frameworks": [
+    "Ethical supply chain data governance and zero-trust customer data privacy...",
+    "Board-level ESG oversight committee and transparent stakeholder reporting..."
+  ],
+  "regulatory_esg_compliance": [
+    "UK Environment Act 2021 compliance disclosure readiness for firms >250 employees...",
+    "Streamlined Energy and Carbon Reporting (SECR) alignment and audit trail generation..."
+  ],
+  "sustainability_roadmap": [
+    "Phase 1 (Months 1-6): Launch automated Scope 1/2 utility data ingestion...",
+    "Phase 2 (Months 7-12): Implement Scope 3 supplier carbon footprint calculations...",
+    "Phase 3 (Months 13-24): Achieve ISO 14064 carbon verification certification for platform outputs..."
+  ]
+}}
+
+BUSINESS IDEA:
+{idea}
+
+RISK ASSESSMENT (primary source):
+{risk[:2500]}
+
+STRATEGY ASSESSMENT:
+{strategy[:2000]}
+
+BUSINESS RULES VALIDATION RESULT:
+{rules_json}
+""",
+        },
+
+        # ── 13. Pitch Summary & Investor Deck Outline ─────────────────────
+        "Pitch Summary & Investor Deck Outline": {
+            "schema": PitchSummaryDeckSchema,
+            "export_formats": ["docx", "pptx", "pdf"],
+            "max_tokens": 8192,
+            "export_mapping": {
+                "elevator_pitch_summary":     "Elevator Pitch Summary",
+                "slide_deck_outline":         "10-Slide Investor Deck Structure",
+                "key_investment_highlights": "Core Investment Highlights & Moat",
+                "use_of_funds_breakdown":     "Capital Allocation & Use of Funds",
+            },
+            "system_prompt": f"""You are the Report Generator for AI Venture Studio.
+Generate a structured Pitch Summary & Investor Deck Outline JSON defining investor presentation strategy.
+Pull insight from Strategy, Finance, Marketing, and Analytics Scores.
+
+CRITICAL: Return a JSON object with exactly these four top-level keys: elevator_pitch_summary, slide_deck_outline, key_investment_highlights, use_of_funds_breakdown -- do not wrap the response in any outer object or key.
+
+Target JSON Format -- return ONLY this block wrapped in ```json ... ```:
+{{
+  "elevator_pitch_summary": "EcoSphere is an automated carbon compliance SaaS platform that connects directly to utility provider APIs, enabling UK SMEs to automate SECR disclosures with zero manual data entry overhead.",
+  "slide_deck_outline": [
+    "Slide 1: Title & Vision -- EcoSphere: Automated Carbon Compliance for SMEs",
+    "Slide 2: Problem -- UK SMEs face mandatory carbon disclosure laws with expensive, manual reporting overhead",
+    "Slide 3: Solution -- Direct-to-utility API data capture with automated Scope 1-3 audit reports",
+    "Slide 4: Market Size -- TAM GBP 5B UK/EU SME carbon accounting software market",
+    "Slide 5: Product & Tech -- Proprietary utility API connectors with zero-trust encryption",
+    "Slide 6: Business Model -- SaaS subscription tiers (GBP 299/mo Starter, GBP 499/mo Growth)",
+    "Slide 7: Go-To-Market -- Utility co-marketing partnerships and digital inbound campaigns",
+    "Slide 8: Competition -- First-mover automated API capture vs manual Excel spreadsheets and generalist CRMs",
+    "Slide 9: Financials -- 75% Gross Margin, break-even at Month 14, CAC GBP 500 / LTV GBP 5,000",
+    "Slide 10: Team & The Ask -- Seeking GBP 500k seed funding for product engineering and GTM expansion"
+  ],
+  "key_investment_highlights": [
+    "Regulatory Tailwinds: UK Environment Act 2021 mandates create mandatory SME customer demand",
+    "Defensive Moat: Direct utility provider API integrations eliminate manual competitor workarounds",
+    "High Margins: 75% gross profit margin with 10x LTV/CAC ratio"
+  ],
+  "use_of_funds_breakdown": [
+    "40% Product & Engineering: Expand utility provider API integrations and Scope 3 LCA engine",
+    "35% Sales & Marketing: Scale inbound digital campaigns and utility co-marketing partnerships",
+    "15% Regulatory & Security: Achieve ISO 14064 verification and zero-trust security audit",
+    "10% Working Capital & Reserve: Maintain 18-month operational runway"
+  ]
+}}
+
+BUSINESS IDEA:
+{idea}
+
+STRATEGY ASSESSMENT:
+{strategy[:2500]}
+
+FINANCE ASSESSMENT:
+{finance[:2500]}
+
+MARKETING PLAN:
+{marketing[:2000]}
+
+ANALYTICAL SCORES:
+{scores_json}
 """,
         },
     }

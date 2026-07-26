@@ -10,10 +10,12 @@ from app.schemas.report import (
     CompetitorAnalysisSchema,
     MarketingGtmSchema,
     RiskAssessmentMatrixSchema,
+    EsgSustainabilitySchema,
+    PitchSummaryDeckSchema,
 )
 from app.pipeline.report_generator import _coerce_schema_fields
 
-def test_all_11_report_schemas():
+def test_all_13_report_schemas():
     schemas = [
         ("Executive Summary", ExecutiveSummarySchema, {
             "concept": "EcoSphere carbon audit SaaS",
@@ -96,9 +98,21 @@ def test_all_11_report_schemas():
             "market_financial_risks": ["Risk: Inflationary budget cuts. Mitigation: Low-cost starter tier"],
             "critic_adversarial_vulnerabilities": ["Vulnerability: SME churn. Action: Automated onboarding"],
         }),
+        ("ESG & Sustainability Recommendations", EsgSustainabilitySchema, {
+            "environmental_impact_metrics": ["Scope 1-3 carbon footprint reduction via utility automation"],
+            "social_governance_frameworks": ["Zero-trust customer data privacy and board ESG oversight"],
+            "regulatory_esg_compliance": ["UK Environment Act 2021 & SECR disclosure audit readiness"],
+            "sustainability_roadmap": ["Phase 1: Utility API data capture", "Phase 2: Scope 3 LCA accounting"],
+        }),
+        ("Pitch Summary & Investor Deck Outline", PitchSummaryDeckSchema, {
+            "elevator_pitch_summary": "EcoSphere automates SECR carbon compliance for UK SMEs via utility API connectors.",
+            "slide_deck_outline": ["Slide 1: Vision", "Slide 2: Problem", "Slide 3: Solution", "Slide 4: Market"],
+            "key_investment_highlights": ["Mandatory regulatory demand", "75% Gross Margin", "Defensive API moat"],
+            "use_of_funds_breakdown": ["40% Engineering", "35% Sales & Marketing", "15% Security", "10% Reserve"],
+        }),
     ]
 
-    assert len(schemas) == 11, f"Expected 11 report schemas, got {len(schemas)}"
+    assert len(schemas) == 13, f"Expected 13 report schemas, got {len(schemas)}"
 
     for name, schema_cls, sample in schemas:
         coerced = _coerce_schema_fields(sample, schema_cls)
@@ -106,7 +120,7 @@ def test_all_11_report_schemas():
         assert val is not None
         print(f"[{name}] Schema Validation & Coercing PASSED!")
 
-    print("\nALL 11 REPORT SCHEMAS VALIDATED SUCCESSFULLY!")
+    print("\nALL 13 REPORT SCHEMAS VALIDATED SUCCESSFULLY!")
 
 if __name__ == "__main__":
-    test_all_11_report_schemas()
+    test_all_13_report_schemas()
