@@ -135,10 +135,47 @@ def _log_prompt_token_estimates(context: dict) -> None:
 def _coerce_schema_fields(report_content: dict, schema_class) -> dict:
     """
     Pre-validate/coerce schema fields before Pydantic validation.
-    - Key alias mapping: rename common LLM key variations to canonical schema fields.
+    - Outer key unwrapping: unwrap single outer object keys (e.g. {"PESTLE Analysis": {...}}).
+    - Case-insensitive key normalization & alias mapping: match LLM key variations to canonical fields.
     - str fields: convert nested dicts/lists to human-readable strings.
-    - List[str] fields: ensure the value is a list of strings.
+    - List[str] fields: convert dicts or list-of-dicts substructures to clean string lists.
     """
+    # ── 0. Unwrap Single Top-Level Key (e.g. {"PESTLE Analysis": {...}} or {"pestle": {...}}) ──
+    while isinstance(report_content, dict) and len(report_content) == 1:
+        single_key = next(iter(report_content))
+        inner_val = report_content[single_key]
+        if isinstance(inner_val, dict) and inner_val:
+            print(f"[Report Generator] Auto-unwrapping outer key '{single_key}' -> inner dict")
+            report_content = inner_val
+        else:
+            break
+
+    if not isinstance(report_content, dict):
+        return report_content
+
+    schema_fields = schema_class.model_fields
+    for canonical_field in schema_fields.keys():
+        if canonical_field not in report_content or not report_content[canonical_field]:
+            matched_key = None
+            # 1. Exact case-insensitive match
+            for key_in_dict in list(report_content.keys()):
+                if key_in_dict.lower() == canonical_field.lower() and report_content[key_in_dict]:
+                    matched_key = key_in_dict
+                    break
+
+            # 2. Substring / suffix match (e.g. "Legal Factors" -> "legal")
+            if not matched_key:
+                for key_in_dict in list(report_content.keys()):
+                    k_low = key_in_dict.lower()
+                    c_low = canonical_field.lower()
+                    if (c_low in k_low or k_low in c_low) and report_content[key_in_dict]:
+                        matched_key = key_in_dict
+                        break
+
+            if matched_key:
+                print(f"[Report Generator] Normalizing key '{matched_key}' -> '{canonical_field}'")
+                report_content[canonical_field] = report_content.pop(matched_key)
+
     # ── Key Alias Mapping ─────────────────────────────────────────────────
     field_aliases = {
         "marketing_sales_strategy": [
@@ -154,12 +191,15 @@ def _coerce_schema_fields(report_content: dict, schema_class) -> dict:
     for canonical_field, aliases in field_aliases.items():
         if canonical_field not in report_content or not report_content[canonical_field]:
             for alias in aliases:
-                if alias in report_content and report_content[alias]:
-                    print(f"[Report Generator] Coercing key alias '{alias}' -> '{canonical_field}'")
-                    report_content[canonical_field] = report_content.pop(alias)
+                alias_key = alias.lower()
+                for key_in_dict in list(report_content.keys()):
+                    if key_in_dict.lower() == alias_key and report_content[key_in_dict]:
+                        print(f"[Report Generator] Coercing key alias '{key_in_dict}' -> '{canonical_field}'")
+                        report_content[canonical_field] = report_content.pop(key_in_dict)
+                        break
+                if canonical_field in report_content:
                     break
 
-    schema_fields = schema_class.model_fields
     for field_name, field_info in schema_fields.items():
         if field_name not in report_content:
             continue
@@ -186,10 +226,29 @@ def _coerce_schema_fields(report_content: dict, schema_class) -> dict:
             else:
                 report_content[field_name] = str(val)
 
-        elif is_list_str and not isinstance(val, list):
-            # LLM returned a string instead of an array
-            if isinstance(val, str):
-                # Split on newlines/bullets as a best-effort recovery
+        elif is_list_str:
+            if isinstance(val, dict):
+                # Dict returned for List[str] field (e.g. {"factors": [...], "impact": "..."})
+                extracted_list = []
+                for k, v in val.items():
+                    if isinstance(v, list):
+                        extracted_list.extend(str(item) for item in v)
+                    else:
+                        extracted_list.append(f"{k.replace('_', ' ').title()}: {v}")
+                report_content[field_name] = extracted_list if extracted_list else [str(val)]
+
+            elif isinstance(val, list):
+                # Ensure every element is a string; if an element is a dict, format it nicely
+                normalized_list = []
+                for item in val:
+                    if isinstance(item, dict):
+                        parts = [f"{k.replace('_', ' ').title()}: {v}" for k, v in item.items()]
+                        normalized_list.append(", ".join(parts))
+                    else:
+                        normalized_list.append(str(item))
+                report_content[field_name] = normalized_list
+
+            elif isinstance(val, str):
                 lines = [
                     line.lstrip("•-* ").strip()
                     for line in val.splitlines()
@@ -198,10 +257,6 @@ def _coerce_schema_fields(report_content: dict, schema_class) -> dict:
                 report_content[field_name] = lines if lines else [val]
             else:
                 report_content[field_name] = [str(val)]
-
-        elif is_list_str and isinstance(val, list):
-            # Ensure every element is a string
-            report_content[field_name] = [str(item) for item in val]
 
     return report_content
 
@@ -634,6 +689,36 @@ Target JSON Format — return ONLY this block wrapped in ```json ... ```:
 Generate a structured PESTLE Analysis JSON covering macro-environmental drivers for this venture.
 Pull insight from Strategy, Risk, Rules Engine, and Critic assessments.
 
+CRITICAL: Return a JSON object with exactly these six top-level keys: political, economic, social, technological, legal, environmental — do not wrap the response in any outer object or key (such as "PESTLE Analysis" or "pestle"). Each of the six keys MUST contain a list of strings.
+
+Target JSON Format — return ONLY this block wrapped in ```json ... ```:
+{{
+  "political": [
+    "UK Environment Act 2021 mandates and Net-Zero 2050 targets...",
+    "Government subsidies and green tax incentives for SMEs..."
+  ],
+  "economic": [
+    "Inflationary pressures impacting SME software budgets...",
+    "Growth in capital allocation for sustainability compliance software..."
+  ],
+  "social": [
+    "Corporate ESG consciousness and customer demand for green supply chains...",
+    "Shift toward transparent corporate environmental disclosure..."
+  ],
+  "technological": [
+    "Utility provider API infrastructure readiness for automated data ingestion...",
+    "Data encryption and cloud security standards for sensitive customer feeds..."
+  ],
+  "legal": [
+    "Streamlined Energy and Carbon Reporting (SECR) disclosure laws...",
+    "UK GDPR and Data Protection Act compliance requirements..."
+  ],
+  "environmental": [
+    "Transition toward mandatory Scope 1, Scope 2, and Scope 3 carbon reporting...",
+    "Net-zero auditing and corporate ESG compliance frameworks..."
+  ]
+}}
+
 BUSINESS IDEA:
 {idea}
 
@@ -651,28 +736,6 @@ REVIEWER BRIEFING:
 
 CRITIC ADVERSARIAL NOTES:
 {critic[:1000]}
-
-Target JSON Format — return ONLY this block wrapped in ```json ... ```:
-{{
-  "political": [
-    "Government sustainability policies, net-zero mandates, subsidies..."
-  ],
-  "economic": [
-    "Macro inflation, SME budget constraints, capital requirements..."
-  ],
-  "social": [
-    "Corporate ESG consciousness, buyer sustainability preferences..."
-  ],
-  "technological": [
-    "Utility API availability, SaaS automation, cloud security standards..."
-  ],
-  "legal": [
-    "Environment Act compliance, SECR disclosure laws, GDPR / data privacy..."
-  ],
-  "environmental": [
-    "Carbon accounting mandates, Scope 1-3 reporting rules, climate goals..."
-  ]
-}}
 """,
         },
 
@@ -1006,6 +1069,14 @@ def _generate_report_json(
 
     # ── All other report types: standard single-call path ─────────────────
 
+    # Extract JSON schema if schema class is declared in config
+    response_schema = None
+    if "schema" in config and hasattr(config["schema"], "model_json_schema"):
+        try:
+            response_schema = config["schema"].model_json_schema()
+        except Exception:
+            response_schema = None
+
     # ── Attempt 1: normal generation ─────────────────────────────────────
     raw_text = call_llm(
         prompt="Generate the report as instructed.",
@@ -1014,6 +1085,8 @@ def _generate_report_json(
         project_id=project_id,
         agent_name=f"{report_type} Generator",
         max_tokens=max_tokens,
+        response_schema=response_schema,
+        json_mode=True,
     )
 
     if isinstance(raw_text, dict) and raw_text.get("status") == "failed":

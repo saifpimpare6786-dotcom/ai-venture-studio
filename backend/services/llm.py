@@ -3,7 +3,13 @@ import httpx
 from typing import Dict, Any, Union
 from app.core.config import settings
 
-def call_gemini(prompt: str, system_prompt: str = None, max_tokens: int = 2048) -> str:
+def call_gemini(
+    prompt: str,
+    system_prompt: str = None,
+    max_tokens: int = 2048,
+    response_schema: dict = None,
+    json_mode: bool = False,
+) -> str:
     """
     Calls the Gemini API (gemini-3.5-flash) with built-in 429 rate limit backoff.
 
@@ -11,6 +17,8 @@ def call_gemini(prompt: str, system_prompt: str = None, max_tokens: int = 2048) 
         max_tokens: Maximum output tokens for the completion. Passed as
                     generationConfig.maxOutputTokens in the Gemini REST payload.
                     Default 2048. Long-form reports (Business Plan) should pass 8192.
+        response_schema: Optional JSON schema dict to enforce output shape at API level.
+        json_mode: If True, sets responseMimeType to application/json.
     """
     # Pace requests to avoid API quota saturation (especially when called concurrently or sequentially)
     time.sleep(1.5)
@@ -23,11 +31,17 @@ def call_gemini(prompt: str, system_prompt: str = None, max_tokens: int = 2048) 
     else:
         contents_part.append({"text": prompt})
         
+    gen_config: Dict[str, Any] = {
+        "maxOutputTokens": max_tokens,
+    }
+    if response_schema or json_mode:
+        gen_config["responseMimeType"] = "application/json"
+    if response_schema:
+        gen_config["responseSchema"] = response_schema
+
     payload = {
         "contents": [{"parts": contents_part}],
-        "generationConfig": {
-            "maxOutputTokens": max_tokens,
-        },
+        "generationConfig": gen_config,
     }
     
     max_retries = 3
@@ -58,13 +72,21 @@ def call_gemini(prompt: str, system_prompt: str = None, max_tokens: int = 2048) 
             
     raise RuntimeError("Gemini API call failed after maximum retries.")
 
-def call_nvidia_nim(prompt: str, system_prompt: str = None, max_tokens: int = 1024) -> str:
+def call_nvidia_nim(
+    prompt: str,
+    system_prompt: str = None,
+    max_tokens: int = 1024,
+    json_mode: bool = False,
+    response_format: dict = None,
+) -> str:
     """
     Calls the NVIDIA NIM API (meta/llama-3.1-70b-instruct) with built-in 429 rate limit backoff.
     
     Args:
         max_tokens: Token budget for the completion. Default 1024 is fine for most agent nodes.
                     Long-form report types (e.g. Business Plan) should pass 4096.
+        json_mode: If True, sets response_format to {"type": "json_object"}.
+        response_format: Custom response format payload for structured output.
     """
     url = "https://integrate.api.nvidia.com/v1/chat/completions"
     headers = {
@@ -77,12 +99,16 @@ def call_nvidia_nim(prompt: str, system_prompt: str = None, max_tokens: int = 10
         messages.append({"role": "system", "content": system_prompt})
     messages.append({"role": "user", "content": prompt})
     
-    payload = {
+    payload: Dict[str, Any] = {
         "model": "meta/llama-3.1-70b-instruct",
         "messages": messages,
         "temperature": 0.2,
         "max_tokens": max_tokens
     }
+    if response_format:
+        payload["response_format"] = response_format
+    elif json_mode:
+        payload["response_format"] = {"type": "json_object"}
     
     max_retries = 3
     backoff = 1.0
@@ -113,7 +139,9 @@ def call_llm(
     preferred_provider: str = "nvidia",
     project_id: str = None,
     agent_name: str = None,
-    max_tokens: int = 1024
+    max_tokens: int = 1024,
+    response_schema: dict = None,
+    json_mode: bool = False,
 ) -> Union[str, Dict[str, Any]]:
     """
     Wrapper offering failover. If preferred model provider fails,
@@ -125,6 +153,8 @@ def call_llm(
     Args:
         max_tokens: Completion token budget passed to NVIDIA NIM. Default 1024 is fine for
                     agent reasoning nodes. Long-form reports (Business Plan etc.) should pass 4096.
+        response_schema: Optional JSON schema dict passed to Gemini.
+        json_mode: If True, enforces JSON mode / MIME type on model APIs.
     """
     primary_err = None
     fallback_err = None
@@ -132,28 +162,38 @@ def call_llm(
     if preferred_provider == "nvidia":
         # 1. Execute NIM primary
         try:
-            return call_nvidia_nim(prompt, system_prompt, max_tokens=max_tokens)
+            return call_nvidia_nim(
+                prompt, system_prompt, max_tokens=max_tokens, json_mode=json_mode
+            )
         except Exception as e:
             primary_err = str(e)
             print(f"WARNING: NVIDIA NIM failed. Falling back to Gemini API. Error: {primary_err}")
         
         # 2. Execute Gemini fallback (pass max_tokens so long-form reports respect output budget)
         try:
-            return call_gemini(prompt, system_prompt, max_tokens=max_tokens)
+            return call_gemini(
+                prompt, system_prompt, max_tokens=max_tokens,
+                response_schema=response_schema, json_mode=json_mode
+            )
         except Exception as e:
             fallback_err = str(e)
             print(f"ERROR: Gemini fallback also failed. Error: {fallback_err}")
     else:
         # 1. Execute Gemini primary (pass max_tokens so long-form reports respect output budget)
         try:
-            return call_gemini(prompt, system_prompt, max_tokens=max_tokens)
+            return call_gemini(
+                prompt, system_prompt, max_tokens=max_tokens,
+                response_schema=response_schema, json_mode=json_mode
+            )
         except Exception as e:
             primary_err = str(e)
             print(f"WARNING: Gemini API failed. Falling back to NVIDIA NIM. Error: {primary_err}")
         
         # 2. Execute NIM fallback
         try:
-            return call_nvidia_nim(prompt, system_prompt, max_tokens=max_tokens)
+            return call_nvidia_nim(
+                prompt, system_prompt, max_tokens=max_tokens, json_mode=json_mode
+            )
         except Exception as e:
             fallback_err = str(e)
             print(f"ERROR: NVIDIA NIM fallback also failed. Error: {fallback_err}")
@@ -185,3 +225,4 @@ def call_llm(
         "status": "failed",
         "error": combined_error
     }
+
