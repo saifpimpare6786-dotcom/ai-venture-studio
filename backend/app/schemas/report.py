@@ -216,3 +216,104 @@ class InvestmentReadinessSchema(ReportSchemaBase):
             "and currency checks passed, and any flagged errors."
         )
     )
+
+
+# ---------------------------------------------------------------------------
+# Priority Tier 2 — Additional Business Intelligence Reports
+# ---------------------------------------------------------------------------
+
+class BusinessModelCanvasSchema(ReportSchemaBase):
+    """
+    Nine-building-block framework for mapping venture business model mechanics.
+    Export formats: DOCX, PPTX, PDF
+    """
+    value_propositions: List[str] = Field(
+        description="Core bundles of products/services that create value for target customer segments.",
+        min_length=1
+    )
+    customer_segments: List[str] = Field(
+        description="Target user groups, buyer personas, or organizations served.",
+        min_length=1
+    )
+    channels: List[str] = Field(
+        description="Communication, distribution, and sales channels used to reach customers.",
+        min_length=1
+    )
+    customer_relationships: List[str] = Field(
+        description="Types of relationships established with customer segments (e.g. automated, personal, self-service).",
+        min_length=1
+    )
+    revenue_streams: List[str] = Field(
+        description="Monetisation mechanisms, concrete pricing tier structures with numeric figures, and income vectors.",
+        min_length=1
+    )
+    key_resources: List[str] = Field(
+        description="Essential physical, intellectual, human, or financial assets required.",
+        min_length=1
+    )
+    key_activities: List[str] = Field(
+        description="Critical operational actions necessary to deliver value, manage channels, and earn revenue.",
+        min_length=1
+    )
+    key_partnerships: List[str] = Field(
+        description="Network of suppliers, technology providers, and strategic partners required.",
+        min_length=1
+    )
+    cost_structure: List[str] = Field(
+        description="Major cost drivers, fixed vs variable operational costs, and capital requirements.",
+        min_length=1
+    )
+
+
+class PestleAnalysisSchema(ReportSchemaBase):
+    """
+    Macro-environmental analysis across six key dimensions.
+    Export formats: DOCX, PPTX, PDF
+    """
+    political: List[str] = Field(
+        description="Government policies, tax laws, trade regulations, and political stability factors.",
+        min_length=1
+    )
+    economic: List[str] = Field(
+        description="Economic growth, interest rates, inflation, macro spend trends, and capital availability.",
+        min_length=1
+    )
+    social: List[str] = Field(
+        description="Demographic trends, cultural shifts, consumer behavior patterns, and workplace attitudes.",
+        min_length=1
+    )
+    technological: List[str] = Field(
+        description="Tech innovations, API ecosystem readiness, automation, R&D activity, and security standards.",
+        min_length=1
+    )
+    legal: List[str] = Field(
+        description="Industry compliance rules, GDPR/data protection, consumer privacy, and employment law.",
+        min_length=1
+    )
+    environmental: List[str] = Field(
+        description="Sustainability mandates, carbon reporting policies, ESG standards, and eco-friendly requirements.",
+        min_length=1
+    )
+
+
+class PortersFiveForcesSchema(ReportSchemaBase):
+    """
+    Competitive intensity and industry attractiveness evaluation across five forces.
+    Export formats: DOCX, PPTX, PDF
+    """
+    threat_of_new_entrants: str = Field(
+        description="Evaluation of barriers to entry, capital requirements, network effects, and incumbent advantages."
+    )
+    bargaining_power_of_buyers: str = Field(
+        description="Evaluation of buyer price sensitivity, switching costs, buyer concentration, and substitute availability."
+    )
+    bargaining_power_of_suppliers: str = Field(
+        description="Evaluation of supplier concentration, uniqueness of inputs/APIs, and vendor switching costs."
+    )
+    threat_of_substitutes: str = Field(
+        description="Evaluation of alternative manual or software solutions, performance trade-offs, and relative pricing."
+    )
+    competitive_rivalry: str = Field(
+        description="Evaluation of industry growth rate, number/strength of direct competitors, and market saturation."
+    )
+

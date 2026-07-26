@@ -113,7 +113,8 @@ def run_test():
         print(f"Database records found: {len(db_res.data)}")
         expected_reports = {
             "Executive Summary", "SWOT Analysis", "Financial Projection",
-            "Investment Readiness Report", "Business Plan"
+            "Investment Readiness Report", "Business Plan",
+            "Business Model Canvas", "PESTLE Analysis", "Porter's Five Forces"
         }
         found_reports = set()
         for record in db_res.data:
@@ -126,7 +127,7 @@ def run_test():
 
         missing = expected_reports - found_reports
         assert not missing, f"Missing report types in DB: {missing}"
-        print("SUCCESS: Test Case 2 executed — ALL 5 report types generated successfully with status 'Completed' in a single run!")
+        print("SUCCESS: Test Case 2 executed — ALL 8 report types generated successfully with status 'Completed' in a single run!")
     except Exception as e:
         print(f"Database assertion failed: {str(e)}")
 
