@@ -987,6 +987,7 @@ def _generate_report_json(
     report_type: str,
     config: dict,
     project_id: str,
+    reduced_config: Optional[dict] = None,
 ) -> dict:
     """
     Calls the LLM to generate one report's JSON.
@@ -1001,13 +1002,14 @@ def _generate_report_json(
 
     For all other report types:
       1. First call uses the full system_prompt with the report's max_tokens.
-      2. On JSONDecodeError, re-prompts with the malformed output and a repair
-         instruction — one repair retry only.
-      3. On second failure, raises so the caller's per-report try/except captures it.
+      2. On JSON error or LLM failure, attempts a JSON repair retry (if raw text exists).
+      3. On total failure of Attempt 1 & 2, retries once with summarized (800-char) context
+         (Attempt 3) as a final safety net for ALL report types before marking as failed.
 
     Args:
         config: Registry entry dict (must contain system_prompt; optionally
                 max_tokens, preferred_provider, _bp_context).
+        reduced_config: Pre-built registry entry using 800-char summarized context.
     Returns:
         Parsed report_content dict ready for schema coercion and Pydantic validation.
     Raises:
@@ -1077,70 +1079,81 @@ def _generate_report_json(
         except Exception:
             response_schema = None
 
+    raw_text = None
     # ── Attempt 1: normal generation ─────────────────────────────────────
-    raw_text = call_llm(
-        prompt="Generate the report as instructed.",
-        system_prompt=config["system_prompt"],
+    try:
+        raw_response = call_llm(
+            prompt="Generate the report as instructed.",
+            system_prompt=config["system_prompt"],
+            preferred_provider=preferred,
+            project_id=project_id,
+            agent_name=f"{report_type} Generator",
+            max_tokens=max_tokens,
+            response_schema=response_schema,
+            json_mode=True,
+        )
+
+        if isinstance(raw_response, dict) and raw_response.get("status") == "failed":
+            raise ValueError(raw_response["error"])
+
+        raw_text = raw_response
+        return safe_parse_json(raw_text)
+
+    except Exception as first_err:
+        print(
+            f"[Report Generator] '{report_type}' — Attempt 1 failed ({first_err})."
+        )
+
+    # ── Attempt 2: JSON repair retry (if Attempt 1 produced raw text) ────
+    if raw_text and isinstance(raw_text, str) and raw_text.strip():
+        print(f"[Report Generator] '{report_type}' — Attempting Attempt 2: JSON repair retry...")
+        try:
+            cleaned = extract_json_block(raw_text)
+            repair_prompt = JSON_REPAIR_PROMPT.format(malformed=cleaned[:6000])
+            repair_max_tokens = max(max_tokens, 8192)
+
+            repaired_text = call_llm(
+                prompt=repair_prompt,
+                system_prompt="You are a JSON repair assistant. Complete and repair truncated JSON. Return only valid JSON wrapped in ```json ... ``` fences.",
+                preferred_provider=preferred,
+                project_id=project_id,
+                agent_name=f"{report_type} Generator [JSON Repair]",
+                max_tokens=repair_max_tokens,
+            )
+
+            if not (isinstance(repaired_text, dict) and repaired_text.get("status") == "failed"):
+                return safe_parse_json(repaired_text)
+        except Exception as repair_err:
+            print(f"[Report Generator] '{report_type}' — Attempt 2 JSON repair failed: {repair_err}.")
+
+    # ── Attempt 3: Reduced-Context Fallback Retry (Final Safety Net) ─────
+    # Triggered if Attempt 1 and 2 failed, OR if full LLM provider exhaustion occurred (e.g. rate-limit failure)
+    reduced_sys_prompt = None
+    if reduced_config and "system_prompt" in reduced_config:
+        reduced_sys_prompt = reduced_config["system_prompt"]
+    else:
+        reduced_sys_prompt = config["system_prompt"] + "\n\nCRITICAL: Keep response concise and complete. Ensure all JSON keys are present and valid."
+
+    print(
+        f"[Report Generator] '{report_type}' — primary/repair attempts failed. "
+        f"Retrying with Attempt 3: reduced-context (800-char summarized context) fallback retry..."
+    )
+
+    reduced_response = call_llm(
+        prompt="Generate a concise, complete JSON report as instructed. Ensure all JSON brackets and quotes are properly closed.",
+        system_prompt=reduced_sys_prompt,
         preferred_provider=preferred,
         project_id=project_id,
-        agent_name=f"{report_type} Generator",
-        max_tokens=max_tokens,
+        agent_name=f"{report_type} Generator [Reduced Fallback]",
+        max_tokens=4096,
         response_schema=response_schema,
         json_mode=True,
     )
 
-    if isinstance(raw_text, dict) and raw_text.get("status") == "failed":
-        raise ValueError(raw_text["error"])
+    if isinstance(reduced_response, dict) and reduced_response.get("status") == "failed":
+        raise ValueError(f"Full LLM provider exhaustion on all attempts: {reduced_response['error']}")
 
-    try:
-        return safe_parse_json(raw_text)
-    except Exception as first_err:
-        print(
-            f"[Report Generator] '{report_type}' — JSON parse error on attempt 1: {first_err}. "
-            f"Attempting JSON repair retry..."
-        )
-
-    # ── Attempt 2: repair retry (with max_tokens=8192) ───────────────────
-    cleaned = extract_json_block(raw_text)
-    repair_prompt = JSON_REPAIR_PROMPT.format(malformed=cleaned[:6000])
-    repair_max_tokens = max(max_tokens, 8192)
-
-    repaired_text = call_llm(
-        prompt=repair_prompt,
-        system_prompt="You are a JSON repair assistant. Complete and repair truncated JSON. Return only valid JSON wrapped in ```json ... ``` fences.",
-        preferred_provider=preferred,
-        project_id=project_id,
-        agent_name=f"{report_type} Generator [JSON Repair]",
-        max_tokens=repair_max_tokens,
-    )
-
-    if isinstance(repaired_text, dict) and repaired_text.get("status") == "failed":
-        raise ValueError(f"JSON repair LLM call failed: {repaired_text['error']}")
-
-    try:
-        return safe_parse_json(repaired_text)
-    except Exception as second_err:
-        print(
-            f"[Report Generator] '{report_type}' — JSON repair retry failed: {second_err}. "
-            f"Attempting Attempt 3: reduced-context fallback retry..."
-        )
-
-    # ── Attempt 3: reduced-context fallback retry ─────────────────────────
-    concise_system_prompt = config["system_prompt"] + "\n\nCRITICAL: Keep response concise and complete. Ensure all JSON keys are present and valid."
-    reduced_text = call_llm(
-        prompt="Generate a concise, complete JSON report as instructed. Ensure all JSON brackets and quotes are properly closed.",
-        system_prompt=concise_system_prompt,
-        preferred_provider=preferred,
-        project_id=project_id,
-        agent_name=f"{report_type} Generator [Reduced Fallback]",
-        max_tokens=8192,
-    )
-
-    if isinstance(reduced_text, dict) and reduced_text.get("status") == "failed":
-        raise ValueError(f"Reduced-context fallback call failed: {reduced_text['error']}")
-
-    return safe_parse_json(reduced_text)
-
+    return safe_parse_json(reduced_response)
 
 
 def report_generator_node(state: AgentState) -> Dict[str, Any]:
@@ -1199,8 +1212,24 @@ def report_generator_node(state: AgentState) -> Dict[str, Any]:
         "overall_score": overall_score,
     }
 
+    # Reduced context (capped fields for Attempt 3 safety net)
+    reduced_context = {
+        "idea": idea[:800],
+        "strategy": strategy[:800],
+        "finance": finance[:800],
+        "marketing": marketing[:800],
+        "risk": risk[:800],
+        "council_str": council_str[:800],
+        "reviewer": reviewer[:400],
+        "critic": critic[:400],
+        "rules_json": json.dumps(rules_validation, indent=2),
+        "scores_json": json.dumps(scores, indent=2),
+        "overall_score": overall_score,
+    }
+
     # ── Build the registry with interpolated prompts ───────────────────────
     registry = _build_registry(context)
+    reduced_registry = _build_registry(reduced_context)
 
     # ── Log estimated input token counts (diagnostic) ─────────────────────
     _log_prompt_token_estimates(context)
@@ -1220,10 +1249,11 @@ def report_generator_node(state: AgentState) -> Dict[str, Any]:
     # ── Generate each report type via the registry ────────────────────────
     for report_type, config in registry.items():
         print(f"[Report Generator] Generating: '{report_type}'...")
+        reduced_config = reduced_registry.get(report_type)
 
         try:
-            # Generate JSON via helper (includes JSON repair retry on truncation)
-            report_content = _generate_report_json(report_type, config, project_id)
+            # Generate JSON via helper (includes JSON repair & reduced-context retry on failure)
+            report_content = _generate_report_json(report_type, config, project_id, reduced_config=reduced_config)
 
             # Coerce field types and key aliases to match schema before Pydantic validation
             report_content = _coerce_schema_fields(report_content, config["schema"])
