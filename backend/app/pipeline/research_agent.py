@@ -7,7 +7,7 @@ from app.database.supabase import get_supabase_client
 from app.core.config import settings
 from services.llm import call_llm
 from services.document_parser import chunk_text
-from services.rag_retriever import ingest_chunks, get_chroma_client
+from services.rag_retriever import ingest_chunks, get_chroma_client, retrieve_context
 from app.pipeline.state import AgentState
 
 QUERY_EXTRACTOR_SYSTEM_PROMPT = """
@@ -59,8 +59,9 @@ def execute_tavily_search(query: str) -> Dict[str, Any]:
 def research_agent_node(state: AgentState) -> Dict[str, Any]:
     """
     Research Agent Node logic.
-    Extracts queries from the plan, conducts web searches, 
-    chunks and embeds the results into ChromaDB, and logs execution.
+    Extracts queries from the plan, conducts web searches (Tavily API),
+    falls back to local RAG (ChromaDB) if Tavily quota/API fails,
+    chunks and embeds fresh web results into ChromaDB, and logs execution path.
     """
     project_id = state.get("project_id")
     plan = state.get("plan", "")
@@ -162,75 +163,116 @@ def research_agent_node(state: AgentState) -> Dict[str, Any]:
     
     all_raw_results = {}
     aggregated_summaries = []
+    execution_paths = []
+    tavily_failures = 0
+    degraded_queries = []
     
-    # 2. Execute Tavily search queries
+    # 2. Execute Tavily search queries with local RAG fallback on quota/API failure
     for idx, query in enumerate(queries):
         print(f"Executing search {idx + 1}/{len(queries)}: '{query}'")
         search_data = execute_tavily_search(query)
-        if not search_data:
-            continue
-            
-        all_raw_results[query] = search_data
         
-        # Accumulate clean text content for the database ingestion
-        answer = search_data.get("answer", "")
-        results = search_data.get("results", [])
-        
-        text_elements = []
-        if answer:
-            text_elements.append(f"Answer Summary: {answer}")
-            
-        for r_idx, r in enumerate(results):
-            title = r.get("title", "No Title")
-            url = r.get("url", "No URL")
-            content = r.get("content", "")
-            text_elements.append(f"Result [{r_idx + 1}] {title} ({url})\nContent: {content}")
-            
-        raw_text = "\n\n".join(text_elements)
-        if not raw_text.strip():
-            continue
-            
-        # 3. Route through document-processing pipeline
-        # Chunk text
-        chunks = chunk_text(raw_text, chunk_size=300, overlap=30)
-        
-        # Embed and ingest into ChromaDB
-        query_slug = "".join(c if c.isalnum() else "_" for c in query.lower())
-        document_id = f"web_research_{str(uuid.uuid4())[:8]}"
-        filename = f"web_search_{query_slug}"
-        
-        print(f"Ingesting {len(chunks)} search chunks into ChromaDB...")
-        ingest_chunks(
-            project_id=project_id,
-            document_id=document_id,
-            filename=filename,
-            category="Web Research",
-            chunks=chunks,
-            extra_metadata={"source_type": "web_research"}
+        has_tavily_results = bool(
+            search_data and (search_data.get("answer") or search_data.get("results"))
         )
         
-        # Collect summaries for state output
-        aggregated_summaries.append(f"Query: '{query}'\nAnswer: {answer or 'No summary answer available.'}")
-        
-    research_summary = "\n\n---\n\n".join(aggregated_summaries) if aggregated_summaries else "Web research completed, but no results were returned."
-    
+        if has_tavily_results:
+            print(f"[Research Agent] Path used: Live Tavily Search for query '{query}'")
+            execution_paths.append({"query": query, "path": "live_tavily_search"})
+            all_raw_results[query] = search_data
+            
+            answer = search_data.get("answer", "")
+            results = search_data.get("results", [])
+            
+            text_elements = []
+            if answer:
+                text_elements.append(f"Answer Summary: {answer}")
+                
+            for r_idx, r in enumerate(results):
+                title = r.get("title", "No Title")
+                url = r.get("url", "No URL")
+                content = r.get("content", "")
+                text_elements.append(f"Result [{r_idx + 1}] {title} ({url})\nContent: {content}")
+                
+            raw_text = "\n\n".join(text_elements)
+            if raw_text.strip():
+                chunks = chunk_text(raw_text, chunk_size=300, overlap=30)
+                query_slug = "".join(c if c.isalnum() else "_" for c in query.lower())
+                document_id = f"web_research_{str(uuid.uuid4())[:8]}"
+                filename = f"web_search_{query_slug}"
+                
+                print(f"Ingesting {len(chunks)} search chunks into ChromaDB...")
+                ingest_chunks(
+                    project_id=project_id,
+                    document_id=document_id,
+                    filename=filename,
+                    category="Web Research",
+                    chunks=chunks,
+                    extra_metadata={"source_type": "web_research"}
+                )
+                
+                aggregated_summaries.append(f"Query: '{query}' [Live Tavily Search]\nAnswer: {answer or 'No summary answer available.'}")
+        else:
+            # ── Tavily API Failed / Quota Exhausted: Fall back to Local RAG ──────
+            tavily_failures += 1
+            print(f"[Research Agent] Path used: Local RAG Fallback (ChromaDB) for query '{query}' (Tavily search failed/exhausted)")
+            
+            rag_chunks = []
+            try:
+                rag_chunks = retrieve_context(project_id, query, top_k=5)
+            except Exception as rag_err:
+                print(f"[Research Agent] Error querying local RAG for query '{query}': {rag_err}")
+                
+            if rag_chunks:
+                print(f"[Research Agent] Local RAG Fallback retrieved {len(rag_chunks)} relevant chunks for query '{query}'")
+                execution_paths.append({"query": query, "path": "local_rag_fallback", "chunks_retrieved": len(rag_chunks)})
+                rag_text = "\n".join(f"- {c[:300]}" for c in rag_chunks[:3])
+                aggregated_summaries.append(
+                    f"Query: '{query}' [Local RAG Fallback]\nSummary Context:\n{rag_text}"
+                )
+            else:
+                # ── Local RAG also has no relevant chunks: Log explicit warning ──
+                print(f"[Research Agent] WARNING: Local RAG knowledge base returned no relevant chunks for query '{query}'. Proceeding with degraded/empty context for this query.")
+                degraded_queries.append(query)
+                execution_paths.append({"query": query, "path": "degraded_empty_context"})
+                aggregated_summaries.append(
+                    f"Query: '{query}' [DEGRADED INPUT WARNING]: Tavily search failed and local RAG knowledge base contained no relevant chunks for this topic."
+                )
+
+    # 3. Assemble research summary & attach status warning headers if degraded
+    if aggregated_summaries:
+        research_body = "\n\n---\n\n".join(aggregated_summaries)
+        if tavily_failures > 0:
+            status_header = f"[RESEARCH STATUS WARNING: Local RAG Fallback Active | Tavily Failures: {tavily_failures}/{len(queries)} | Degraded Queries: {len(degraded_queries)}]"
+            research_summary = f"{status_header}\n\n{research_body}"
+        else:
+            research_summary = research_body
+    else:
+        research_summary = "[RESEARCH STATUS WARNING: Degraded Input - Tavily quota/API failed and local RAG contained no research context.]"
+
     # 4. Log transaction to Supabase agent_logs
     try:
         supabase = get_supabase_client()
+        status_str = "completed (with_local_rag_fallback)" if tavily_failures > 0 else "completed"
         supabase.table("agent_logs").insert({
             "project_id": project_id,
             "agent_name": "Research Agent",
-            "status": "completed",
+            "status": status_str,
             "input_data": {
-                "extracted_queries": queries
+                "extracted_queries": queries,
+                "force_refresh": force_refresh
             },
             "output_data": {
                 "research_results": research_summary,
                 "research_summary": research_summary,
+                "execution_paths": execution_paths,
+                "tavily_failures": tavily_failures,
+                "degraded_queries": degraded_queries,
+                "fallback_used": tavily_failures > 0,
                 "raw_results_keys": list(all_raw_results.keys())
             }
         }).execute()
-        print("Logged Research Agent execution to Supabase.")
+        print(f"Logged Research Agent execution ({status_str}) to Supabase.")
     except Exception as db_err:
         print(f"Supabase Agent Log Sync Warning (continuing): {str(db_err)}")
         
@@ -238,3 +280,4 @@ def research_agent_node(state: AgentState) -> Dict[str, Any]:
     return {
         "research_results": research_summary
     }
+
