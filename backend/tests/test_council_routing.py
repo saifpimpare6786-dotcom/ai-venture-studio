@@ -10,11 +10,18 @@ def test_llm_nim_routing_and_tokens():
     }
 
     with patch("httpx.post", return_value=mock_response) as mock_post:
-        # Standard agent call -> default 2048 max_tokens
+        # Standard agent call -> default 2048 max_tokens & default llama-3.1-70b-instruct
         res1 = call_nvidia_nim(prompt="Test prompt", agent_name="Strategy Agent")
         assert res1 == "Test output"
         payload1 = mock_post.call_args_list[-1][1]["json"]
         assert payload1["max_tokens"] == 2048
+        assert payload1["model"] == "meta/llama-3.1-70b-instruct"
+
+        # Marketing Agent call -> deepseek-ai/deepseek-v4-flash
+        res_mkt = call_nvidia_nim(prompt="Test prompt", agent_name="Marketing Agent")
+        assert res_mkt == "Test output"
+        payload_mkt = mock_post.call_args_list[-1][1]["json"]
+        assert payload_mkt["model"] == "deepseek-ai/deepseek-v4-flash"
 
         # Report call -> auto-bumped to 8192 max_tokens
         res2 = call_nvidia_nim(prompt="Test prompt", agent_name="Report Generator (Executive Summary)")

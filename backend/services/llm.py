@@ -75,7 +75,7 @@ def call_gemini(
 # Dynamic NIM model routing dictionary mapping agent types to optimized NVIDIA NIM models
 NIM_MODEL_ROUTING: Dict[str, str] = {
     "default": "meta/llama-3.1-70b-instruct",
-    # Agent type dynamic routing mappings will be registered here
+    "Marketing Agent": "deepseek-ai/deepseek-v4-flash",
 }
 
 def call_nvidia_nim(

@@ -11,6 +11,27 @@ Combines Generative AI, Agentic AI, Multi-Agent Deliberation, Retrieval-Augmente
 Specialized agents reason independently, debate via an LLM Council, undergo review and critique, and are validated against structured business rules before producing executive-ready outputs.
 
 ## 4. Core agent pipeline (in order)
+## Consolidated LLM Council Debate System & Round 1 Model Routing Validation
+
+### 1. Hybrid Model Routing Architecture
+- Dynamic agent model dispatch in `backend/services/llm.py`:
+  - `NIM_MODEL_ROUTING`: `"Marketing Agent"` mapped to `"deepseek-ai/deepseek-v4-flash"`.
+  - Max token budget dynamically scaled to `8192` for reports and council reviews (default `2048`).
+  - Timeout expanded to `120.0s`.
+
+### 2. Consolidated 1-Call Council Debate System
+- Refactored `llm_council_node` in `backend/app/pipeline/council_agent.py`:
+  - Strategy, Finance, Marketing, and Risk criteria combined into a single structured prompt returned via `json_mode=True`.
+  - 1 automatic JSON repair retry safeguard.
+  - Failure fallback to the 4-separate-concurrent-call method (`ThreadPoolExecutor`) if repair fails.
+
+### 3. Round 1 Validation Results (3 Test Runs)
+- **Run 1:** PASSED (Marketing Agent routed to `deepseek-ai/deepseek-v4-flash`; Council executed in 1 call; overall score 70.0).
+- **Run 2:** PASSED (Marketing Agent routed to `deepseek-ai/deepseek-v4-flash`; Council executed in 1 call; overall score 72.25).
+- **Run 3:** PASSED (Marketing Agent routed to `deepseek-ai/deepseek-v4-flash`; Council executed in 1 call; overall score 70.0).
+- **Zero NIM 429 Rate-Limit Spikes** recorded across all 3 runs for the Council debate stage.
+- All agent logs successfully persisted to Supabase `agent_logs`.
+
 1. **Planning Agent** — breaks down the business idea into a research/analysis plan
 2. **Orchestrator Agent** — routes tasks to the right specialized agents, manages pipeline state
 3. **Research Agent** — gathers live market/competitor/industry data via web search (Tavily API), used alongside or instead of uploaded documents — see section 18
