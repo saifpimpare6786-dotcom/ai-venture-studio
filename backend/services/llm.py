@@ -77,12 +77,8 @@ ENABLE_DEEPSEEK_THINKING_MODE: bool = True
 
 # Dynamic NIM model routing dictionary mapping agent types to optimized NVIDIA NIM models
 NIM_MODEL_ROUTING: Dict[str, str] = {
-    "Strategy Agent": "moonshotai/kimi-k2.6",
-    "Orchestrator Agent": "moonshotai/kimi-k2.6",
-    "Marketing Agent": "deepseek-ai/deepseek-v4-flash",
     "Finance Agent": "deepseek-ai/deepseek-v4-pro",
     "Risk Agent": "deepseek-ai/deepseek-v4-pro",
-    "Business Rules Engine": "mistralai/mistral-large-3-675b-instruct-2512",
     "default": "meta/llama-3.1-70b-instruct",
 }
 
