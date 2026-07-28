@@ -74,6 +74,7 @@ def call_gemini(
 
 # Dynamic NIM model routing dictionary mapping agent types to optimized NVIDIA NIM models
 NIM_MODEL_ROUTING: Dict[str, str] = {
+    "Marketing Agent": "deepseek-ai/deepseek-v4-flash",
     "default": "meta/llama-3.1-70b-instruct",
 }
 
@@ -103,6 +104,7 @@ def call_nvidia_nim(
     
     # Resolve model via dynamic routing dictionary
     model_id = NIM_MODEL_ROUTING.get(agent_name, NIM_MODEL_ROUTING["default"]) if agent_name else NIM_MODEL_ROUTING["default"]
+    print(f"[NVIDIA NIM] Dispatching call for '{agent_name or 'Unspecified'}' -> Model: '{model_id}'")
     
     # Adjust max_tokens: default 2048, bump to 8192 if agent_name contains "report" or "council"
     if agent_name and any(k in agent_name.lower() for k in ("report", "council")):
