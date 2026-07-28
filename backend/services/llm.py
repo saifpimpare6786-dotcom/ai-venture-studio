@@ -44,8 +44,8 @@ def call_gemini(
         "generationConfig": gen_config,
     }
     
-    max_retries = 3
-    backoff = 1.0
+    max_retries = 5
+    backoff = 2.0
     for attempt in range(max_retries):
         try:
             response = httpx.post(url, json=payload, headers={"Content-Type": "application/json"}, timeout=60.0)
@@ -75,7 +75,6 @@ def call_gemini(
 # Dynamic NIM model routing dictionary mapping agent types to optimized NVIDIA NIM models
 NIM_MODEL_ROUTING: Dict[str, str] = {
     "default": "meta/llama-3.1-70b-instruct",
-    "Marketing Agent": "deepseek-ai/deepseek-v4-flash",
 }
 
 def call_nvidia_nim(

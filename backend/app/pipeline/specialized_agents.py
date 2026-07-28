@@ -14,14 +14,12 @@ Analyze the provided business idea input, orchestrator directives, and RAG docum
 Deliver an expert assessment covering:
 1. Market Fit Assessment: The validity of the problem-solution fit.
 2. Competitive Landscape: Identification of key direct and indirect competitors or categories.
-3. Strategic Position: Unique selling propositions (USPs) and strategic recommendations.
-   PRICING ALIGNMENT: The Finance Agent has already established authoritative pricing tiers
+3. Strategic Position & Pricing Alignment: Unique selling propositions (USPs) and strategic recommendations.
+   PRICING ALIGNMENT MANDATE: The Finance Agent has already established authoritative pricing tiers
    for this venture (provided below as FINANCE PRICING REFERENCE). When discussing pricing
-   in your assessment, you MUST reference those exact tier names and numeric values. Do NOT
-   invent different prices. You may frame pricing strategically (e.g. competitive positioning,
-   value-based rationale) but the numbers must match the Finance Agent's output exactly.
-   You MUST state the concrete numeric price for EVERY tier defined by Finance, including any
-   Enterprise price floor figure (e.g., 'Enterprise: from £500/month').
+   in your assessment, you MUST explicitly list EVERY tier by name and include its exact numeric value and currency symbol matching Finance.
+   Do NOT invent different prices or omit numeric figures. You MUST state the concrete numeric price for EVERY tier defined by Finance,
+   including any Enterprise price floor figure (e.g. Starter: £49/month, Growth: £199/month, Enterprise: from £499/month or USD/EUR equivalents matching Finance).
 
 {finance_pricing_context}
 
@@ -35,16 +33,23 @@ Analyze the provided business idea input, orchestrator directives, and RAG docum
 
 Deliver an expert assessment covering:
 1. Revenue & Pricing Model: Suggested pricing strategies and monetisation vectors.
+   GEOGRAPHIC CURRENCY MANDATE:
+   Examine the Business Idea Input and Document Context for the target country/region.
+   - If the business idea specifies a UK venture, UK-based SMEs, or UK customers/location, ALL pricing MUST be in British Pounds (£ / GBP).
+   - If Europe / EU, use Euros (€ / EUR).
+   - If US or unspecified / Global, use US Dollars ($ / USD).
+   Do NOT use USD ($) for a UK-based business.
+
    You MUST outline at least two or three concrete pricing tiers with specific names and
    exact numeric values. Rules that apply WITHOUT EXCEPTION to every tier you define:
-   a) Every tier MUST include a concrete numeric price (e.g. $50/month, $200/month).
+   a) Every tier MUST include a concrete numeric price (e.g. £49/month or $49/month depending on target currency).
    b) Enterprise tiers MUST include a concrete numeric price floor or starting-from figure
-      (e.g. "Enterprise: from $500/month, negotiated per contract"). You may note that
+      (e.g. "Enterprise: from £499/month, negotiated per contract"). You may note that
       final pricing is negotiated, but the numeric anchor MUST appear in the same sentence.
    c) Do NOT write "custom pricing", "contact us", "pricing on request", or any equivalent
       phrase without also stating the numeric floor in the same tier description.
    d) Do NOT describe pricing generically (e.g. "Subscription-based model") without tiers.
-   Concrete examples of COMPLIANT output: "Starter: $49/month", "Enterprise: from $499/month".
+   Concrete examples of COMPLIANT output for UK: "Starter: £299/month", "Enterprise: from £1,499/month".
    Concrete examples of NON-COMPLIANT output: "Enterprise: custom", "Pricing: negotiated".
 2. Pricing Strategy Sanity Check: An evaluation of competitiveness and profit margins.
 3. Capital Requirements: Rough estimates of seed capital, operational costs, and development resources.
@@ -61,13 +66,11 @@ Deliver an expert assessment covering:
 1. Customer Outreach Channels: The most effective digital and offline acquisition methods.
 2. Ideal Client Profile (ICP): Persona specifications based on size, industry, or demographics.
 3. Branding & Value Proposition Vectors: Emphasize core values and positioning taglines.
-   PRICING RULE — CRITICAL: The Finance Agent has already defined the authoritative pricing tiers
-   for this venture. These tiers are provided to you verbatim in the section labelled
-   "Finance Agent Pricing Tiers (Authoritative — Do Not Change)" in your user prompt.
-   You MUST reference those exact tier names and numeric values whenever pricing is mentioned
-   in your assessment. Do NOT invent, round, or substitute different price figures.
-   Include all tiers explicitly by name and numeric value (including Enterprise price floors,
-   e.g. Starter: $50/month, Growth: $200/month, Enterprise: from $500/month) in your branding and messaging copy.
+4. Pricing & Growth Tier Messaging (CRITICAL):
+   The Finance Agent has already defined the authoritative pricing tiers for this venture.
+   These tiers are provided to you verbatim in the section labelled "Finance Agent Pricing Tiers (Authoritative — Do Not Change)" in your user prompt.
+   You MUST create a dedicated "Pricing & Tier Messaging" subsection that explicitly lists EVERY tier by its exact tier name and numeric price figure with currency symbol (e.g. Starter: £299/month, Growth: £499/month, Enterprise: from £1,499/month or $ equivalents matching Finance).
+   Do NOT invent, round, or substitute different price figures. Do NOT omit tier names or price values.
 
 Ground your answers in retrieved RAG document/research/framework evidence. Maintain a professional, executive tone.
 """

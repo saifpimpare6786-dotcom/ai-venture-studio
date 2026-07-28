@@ -11,8 +11,8 @@ You are a precise data extraction agent. Your role is to read a business idea an
 
 Target JSON Format:
 {
-  "target_country": "The target country or region stated in the business idea (e.g. 'UK', 'US', 'Europe', 'India'). If not specified, output 'Global'.",
-  "finance_currency": "The currency code or symbol used in the Finance assessment (e.g. 'USD', '$', 'GBP', '£', 'EUR', '€'). If not specified, output 'USD'.",
+  "target_country": "The target country or region stated in the business idea (e.g. 'UK', 'US', 'Europe', 'India'). Read the BUSINESS IDEA carefully: if it mentions 'UK-based', 'UK', 'United Kingdom', or 'London', output 'UK'. If 'US' or 'United States', output 'US'. If not specified, output 'Global'.",
+  "finance_currency": "The currency code or symbol used in the Finance assessment (e.g. 'GBP', '£', 'USD', '$', 'EUR', '€'). If not specified, output 'USD'.",
   "strategy_pricing": [
     {"tier_name": "Tier name (e.g. Starter, Growth, Enterprise)", "price_val": 123.45}
   ],
@@ -23,6 +23,9 @@ Target JSON Format:
     {"tier_name": "Tier name", "price_val": 123.45}
   ]
 }
+
+Rules for tier_name:
+- tier_name MUST ALWAYS be a non-empty, non-null string describing the pricing tier (e.g. 'Starter', 'Growth', 'Enterprise'). NEVER return null or empty string for tier_name.
 
 Rules for price_val:
 - Use the exact numeric dollar/pound/euro value (as a float) if the assessment states a specific amount OR a starting price floor (e.g., 'from $500/month', 'Enterprise: starting at £1000 (negotiated)' → extract 500.0 or 1000.0). Even if terms like 'negotiated', 'custom contract', or 'starting from' are present alongside a number, ALWAYS extract the numeric figure as float.
@@ -37,7 +40,7 @@ _CUSTOM_PRICING_SENTINEL = -1.0
 
 
 class BusinessAssessmentPricing(BaseModel):
-    tier_name: str
+    tier_name: str = Field(default="General Tier")
     # price_val semantics:
     #   > 0       → concrete numeric price (included in mismatch check)
     #   -1.0      → intentional custom/contact-us pricing (skip mismatch)
@@ -272,6 +275,23 @@ def business_rules_engine_node(state: AgentState) -> Dict[str, Any]:
         extracted_dict = json.loads(cleaned_json_str)
     except Exception as parse_err:
         print(f"Rules engine extraction parser error: {str(parse_err)}")
+
+    # 1b. Deterministic target country check & pricing dictionary sanitization
+    if isinstance(extracted_dict, dict):
+        idea_lower = idea.lower()
+        extracted_country = str(extracted_dict.get("target_country", "")).lower()
+        if any(term in idea_lower for term in ["uk", "uk-based", "united kingdom", "london", "britain", "england", "scotland", "wales"]) and extracted_country in ("global", "", "none", "unknown"):
+            extracted_dict["target_country"] = "UK"
+
+        # Sanitize pricing tier names to prevent null/None validation failures
+        for key in ["strategy_pricing", "finance_pricing", "marketing_pricing"]:
+            pricing_list = extracted_dict.get(key)
+            if isinstance(pricing_list, list):
+                for item in pricing_list:
+                    if isinstance(item, dict):
+                        tier_name = item.get("tier_name")
+                        if tier_name is None or not isinstance(tier_name, str) or not tier_name.strip():
+                            item["tier_name"] = "General Tier"
         
     is_valid = True
     errors = []

@@ -42,18 +42,27 @@ def fetch_cached_agent_outputs(supabase, project_id: str) -> Optional[Dict[str, 
             return None
 
         # Helper to find latest valid log entry for given agent name filter function
-        def get_latest_valid_output(agent_name_matcher, validator_fn):
+        def get_latest_valid_output(agent_name_matcher, validator_fn, min_timestamp: Optional[str] = None):
             for row in res.data:
                 name = row.get("agent_name", "")
                 if agent_name_matcher(name):
                     status = row.get("status", "")
+                    ts = row.get("timestamp", "unknown")
+                    row_id = row.get("id", "unknown")
+
+                    # Enforce timestamp cohesion: downstream nodes must be logged at or after min_timestamp
+                    if min_timestamp and ts < min_timestamp:
+                        print(f"[Cache Miss] Node '{name}' log ({ts}) predates latest Planning run ({min_timestamp}). Skipping stale entry.")
+                        continue
+
                     out = row.get("output_data") or {}
                     val = validator_fn(status, out)
                     if val is not None:
-                        return val
+                        print(f"[Cache Hit] Node: '{name}' | Log ID: {row_id} | Timestamp: {ts}")
+                        return {"val": val, "timestamp": ts, "id": row_id}
             return None
 
-        # 1. Planning Agent
+        # 1. Planning Agent — establishes the min_timestamp baseline for all downstream nodes
         def val_planning(status, out):
             if status == "completed":
                 plan = out.get("plan", "")
@@ -61,9 +70,11 @@ def fetch_cached_agent_outputs(supabase, project_id: str) -> Optional[Dict[str, 
                     return plan
             return None
 
-        plan = get_latest_valid_output(lambda name: name == "Planning Agent", val_planning)
-        if not plan:
+        plan_entry = get_latest_valid_output(lambda name: name == "Planning Agent", val_planning)
+        if not plan_entry:
             return None
+        plan = plan_entry["val"]
+        min_ts = plan_entry["timestamp"]
 
         # 2. Orchestrator Agent
         def val_orch(status, out):
@@ -73,9 +84,10 @@ def fetch_cached_agent_outputs(supabase, project_id: str) -> Optional[Dict[str, 
                     return directives
             return None
 
-        directives = get_latest_valid_output(lambda name: name == "Orchestrator Agent", val_orch)
-        if not directives:
+        orch_entry = get_latest_valid_output(lambda name: name == "Orchestrator Agent", val_orch, min_timestamp=min_ts)
+        if not orch_entry:
             return None
+        directives = orch_entry["val"]
 
         # 3. Research Agent
         def val_research(status, out):
@@ -85,9 +97,10 @@ def fetch_cached_agent_outputs(supabase, project_id: str) -> Optional[Dict[str, 
                     return res_text
             return None
 
-        research_results = get_latest_valid_output(lambda name: name == "Research Agent", val_research)
-        if not research_results:
+        res_entry = get_latest_valid_output(lambda name: name == "Research Agent", val_research, min_timestamp=min_ts)
+        if not res_entry:
             return None
+        research_results = res_entry["val"]
 
         # 4. Specialized Business Agents (Finance, Strategy, Marketing, Risk)
         specialized_outputs = {}
@@ -97,17 +110,19 @@ def fetch_cached_agent_outputs(supabase, project_id: str) -> Optional[Dict[str, 
             ("Marketing Agent", "marketing"),
             ("Risk Agent", "risk"),
         ]:
-            def val_spec(status, out, key=spec_key):
-                if status == "completed":
-                    text = out.get(key) or out.get("assessment", "")
-                    if isinstance(text, str) and len(text.strip()) >= 200 and not text.startswith("Execution failed:") and text != "__FAILED__":
-                        return text
-                return None
+            def make_val_spec(target_key):
+                def val_spec(status, out):
+                    if status == "completed":
+                        text = out.get(target_key) or out.get("assessment", "")
+                        if isinstance(text, str) and len(text.strip()) >= 200 and not text.startswith("Execution failed:") and text != "__FAILED__":
+                            return text
+                    return None
+                return val_spec
 
-            spec_val = get_latest_valid_output(lambda name, sa=spec_agent: name == sa, val_spec)
-            if not spec_val:
+            spec_entry = get_latest_valid_output(lambda name, sa=spec_agent: name == sa, make_val_spec(spec_key), min_timestamp=min_ts)
+            if not spec_entry:
                 return None
-            specialized_outputs[spec_key] = spec_val
+            specialized_outputs[spec_key] = spec_entry["val"]
 
         # 5. Council Agent (MUST be status="completed", failure_count == 0, and exactly 4 complete valid reviews)
         def val_council(status, out):
@@ -127,11 +142,12 @@ def fetch_cached_agent_outputs(supabase, project_id: str) -> Optional[Dict[str, 
                         return valid_feedback
             return None
 
-        council_feedback = get_latest_valid_output(
-            lambda name: name in ("Council Agent", "LLM Council"), val_council
+        council_entry = get_latest_valid_output(
+            lambda name: name in ("Council Agent", "LLM Council"), val_council, min_timestamp=min_ts
         )
-        if not council_feedback:
+        if not council_entry:
             return None
+        council_feedback = council_entry["val"]
 
         # 6. Reviewer Agent
         def val_reviewer(status, out):
@@ -141,9 +157,10 @@ def fetch_cached_agent_outputs(supabase, project_id: str) -> Optional[Dict[str, 
                     return rev
             return None
 
-        reviewer_notes = get_latest_valid_output(lambda name: name == "Reviewer Agent", val_reviewer)
-        if not reviewer_notes:
+        reviewer_entry = get_latest_valid_output(lambda name: name == "Reviewer Agent", val_reviewer, min_timestamp=min_ts)
+        if not reviewer_entry:
             return None
+        reviewer_notes = reviewer_entry["val"]
 
         # 7. Critic Agent
         def val_critic(status, out):
@@ -153,21 +170,23 @@ def fetch_cached_agent_outputs(supabase, project_id: str) -> Optional[Dict[str, 
                     return critic
             return None
 
-        critic_notes = get_latest_valid_output(lambda name: name == "Critic Agent", val_critic)
-        if not critic_notes:
+        critic_entry = get_latest_valid_output(lambda name: name == "Critic Agent", val_critic, min_timestamp=min_ts)
+        if not critic_entry:
             return None
+        critic_notes = critic_entry["val"]
 
-        # 8. Business Rules Engine
+        # 8. Business Rules Engine — MUST be status="completed" and is_valid MUST be True
         def val_rules(status, out):
-            if status in ("completed", "warning"):
+            if status == "completed":
                 rules_res = out.get("rules_validation_result") or out.get("validation_result", {})
-                if isinstance(rules_res, dict) and "is_valid" in rules_res and "extracted_data" in rules_res:
+                if isinstance(rules_res, dict) and rules_res.get("is_valid") is True and "extracted_data" in rules_res:
                     return rules_res
             return None
 
-        rules_validation_result = get_latest_valid_output(lambda name: name == "Business Rules Engine", val_rules)
-        if not rules_validation_result:
+        rules_entry = get_latest_valid_output(lambda name: name == "Business Rules Engine", val_rules, min_timestamp=min_ts)
+        if not rules_entry:
             return None
+        rules_validation_result = rules_entry["val"]
 
         # 9. Analytics & Scoring Engine
         def val_scoring(status, out):
@@ -177,9 +196,10 @@ def fetch_cached_agent_outputs(supabase, project_id: str) -> Optional[Dict[str, 
                     return scores
             return None
 
-        scores = get_latest_valid_output(lambda name: name == "Analytics & Scoring Engine", val_scoring)
-        if not scores:
+        scoring_entry = get_latest_valid_output(lambda name: name == "Analytics & Scoring Engine", val_scoring, min_timestamp=min_ts)
+        if not scoring_entry:
             return None
+        scores = scoring_entry["val"]
 
         return {
             "plan": plan,
