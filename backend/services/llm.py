@@ -150,6 +150,34 @@ def call_nvidia_nim(
             
     raise RuntimeError(f"NVIDIA NIM call failed after maximum retries for model {model_id}.")
 
+# Per-run Gemini Circuit Breaker state
+_gemini_consecutive_failures: int = 0
+_gemini_marked_down: bool = False
+
+def reset_gemini_circuit_breaker() -> None:
+    """Resets the per-run Gemini circuit breaker state for a new pipeline run."""
+    global _gemini_consecutive_failures, _gemini_marked_down
+    _gemini_consecutive_failures = 0
+    _gemini_marked_down = False
+    print("[Circuit Breaker] Reset Gemini circuit breaker for new pipeline run.")
+
+def is_gemini_marked_down() -> bool:
+    """Returns True if Gemini is currently marked DOWN for this pipeline run."""
+    return _gemini_marked_down
+
+def _record_gemini_success() -> None:
+    """Resets consecutive failures when a Gemini call succeeds."""
+    global _gemini_consecutive_failures
+    _gemini_consecutive_failures = 0
+
+def _record_gemini_failure() -> None:
+    """Increments failure count and trips circuit breaker if threshold reached (>= 2)."""
+    global _gemini_consecutive_failures, _gemini_marked_down
+    _gemini_consecutive_failures += 1
+    if _gemini_consecutive_failures >= 2 and not _gemini_marked_down:
+        _gemini_marked_down = True
+        print("[Circuit Breaker] Gemini marked DOWN for this run — routing NVIDIA-primary.")
+
 def call_llm(
     prompt: str,
     system_prompt: str = None,
@@ -176,7 +204,12 @@ def call_llm(
     primary_err = None
     fallback_err = None
 
-    if preferred_provider == "nvidia":
+    effective_provider = preferred_provider
+    if preferred_provider == "gemini" and _gemini_marked_down:
+        print("[Circuit Breaker] Gemini marked DOWN for this run — routing NVIDIA-primary.")
+        effective_provider = "nvidia"
+
+    if effective_provider == "nvidia":
         # 1. Execute NIM primary
         try:
             return call_nvidia_nim(
@@ -186,25 +219,34 @@ def call_llm(
             primary_err = str(e)
             print(f"WARNING: NVIDIA NIM failed. Falling back to Gemini API. Error: {primary_err}")
         
-        # 2. Execute Gemini fallback (pass max_tokens so long-form reports respect output budget)
-        try:
-            return call_gemini(
-                prompt, system_prompt, max_tokens=max_tokens,
-                response_schema=response_schema, json_mode=json_mode
-            )
-        except Exception as e:
-            fallback_err = str(e)
-            print(f"ERROR: Gemini fallback also failed. Error: {fallback_err}")
+        # 2. Execute Gemini fallback (only if Gemini is not marked DOWN)
+        if not _gemini_marked_down:
+            try:
+                res = call_gemini(
+                    prompt, system_prompt, max_tokens=max_tokens,
+                    response_schema=response_schema, json_mode=json_mode
+                )
+                _record_gemini_success()
+                return res
+            except Exception as e:
+                fallback_err = str(e)
+                print(f"ERROR: Gemini fallback also failed. Error: {fallback_err}")
+                _record_gemini_failure()
+        else:
+            fallback_err = "Gemini marked DOWN (bypassed fallback)."
     else:
-        # 1. Execute Gemini primary (pass max_tokens so long-form reports respect output budget)
+        # 1. Execute Gemini primary
         try:
-            return call_gemini(
+            res = call_gemini(
                 prompt, system_prompt, max_tokens=max_tokens,
                 response_schema=response_schema, json_mode=json_mode
             )
+            _record_gemini_success()
+            return res
         except Exception as e:
             primary_err = str(e)
             print(f"WARNING: Gemini API failed. Falling back to NVIDIA NIM. Error: {primary_err}")
+            _record_gemini_failure()
         
         # 2. Execute NIM fallback
         try:

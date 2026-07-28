@@ -1,7 +1,7 @@
 import os
 from typing import Dict, Any
 from app.database.supabase import get_supabase_client
-from services.llm import call_llm
+from services.llm import call_llm, reset_gemini_circuit_breaker
 from app.pipeline.state import AgentState
 
 PLANNING_SYSTEM_PROMPT = """
@@ -27,6 +27,7 @@ def planning_agent_node(state: AgentState) -> Dict[str, Any]:
     Formulates a structured roadmap from raw business idea inputs and RAG context.
     Logs transaction events to Supabase database.
     """
+    reset_gemini_circuit_breaker()
     project_id = state.get("project_id")
     idea_input = state.get("business_idea_input", "")
     rag_context = state.get("rag_context", [])
