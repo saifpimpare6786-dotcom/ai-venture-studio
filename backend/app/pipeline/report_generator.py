@@ -11,6 +11,7 @@ Adding a new report type = add a schema + one registry entry. Zero new node logi
 """
 import json
 import re
+import time
 from typing import Dict, Any, List, Optional
 from app.database.supabase import get_supabase_client
 from services.llm import call_llm
@@ -1534,13 +1535,18 @@ def report_generator_node(state: AgentState) -> Dict[str, Any]:
     success_count = 0
     failure_count = 0
 
-    #  Check Business Rules Engine validation status 
-    rules_valid = rules_validation.get("is_valid", True)
-    validation_warning_msg = None
+    #  Check Business Rules Engine validation status (Hard-block if invalid) 
+    rules_valid = rules_validation.get("is_valid", False)
     if not rules_valid:
         errors_list = rules_validation.get("errors", ["Validation found inconsistencies"])
-        validation_warning_msg = f"Pricing Data Inconsistency -- Financial figures may be unaligned ({', '.join(errors_list)})"
-        print(f"[Report Generator] WARNING: {validation_warning_msg}. Proceeding with report generation and attaching warning banner.")
+        abort_reason = f"Business Rules Engine validation failed ({', '.join(errors_list)})"
+        print(f"[Report Generator] ERROR: {abort_reason}. Hard-blocking report generation per product spec.")
+        _record_pipeline_abort(supabase, project_id, abort_reason, scores)
+        return {
+            "final_report": f"# Report Generation Aborted\n\n{abort_reason}",
+            "pipeline_aborted": True,
+            "abort_reason": abort_reason
+        }
 
     #  Generate each report type via the registry 
     for report_type, config in registry.items():
@@ -1575,15 +1581,17 @@ def report_generator_node(state: AgentState) -> Dict[str, Any]:
 
             # Clean up internal debug keys before DB upsert
             report_content_clean = {k: v for k, v in report_content.items() if not k.startswith("_")}
-            if validation_warning_msg:
-                report_content_clean["validation_warning"] = validation_warning_msg
-
-            # Upsert to Supabase reports table
-            _upsert_report(supabase, project_id, report_type, report_content_clean, scores, "Completed")
 
             generated_reports[report_type] = report_content_clean
             success_count += 1
             print(f"[Report Generator] '{report_type}' -- OK")
+
+            # Post-processing persistence & rate-limit throttling (fail-safe)
+            try:
+                _upsert_report(supabase, project_id, report_type, report_content_clean, scores, "Completed")
+                time.sleep(1.5)
+            except Exception as post_err:
+                print(f"[Report Generator Post-Processing Warning] '{report_type}': {post_err}")
 
         except Exception as err:
             failure_count += 1
@@ -1591,7 +1599,10 @@ def report_generator_node(state: AgentState) -> Dict[str, Any]:
             print(f"[Report Generator] '{report_type}' -- FAILED: {error_msg}")
             fallback_content = {"error": f"Report generation failed: {error_msg}"}
             generated_reports[report_type] = fallback_content
-            _upsert_report(supabase, project_id, report_type, fallback_content, scores, "Failed")
+            try:
+                _upsert_report(supabase, project_id, report_type, fallback_content, scores, "Failed")
+            except Exception as db_err:
+                print(f"[Report Generator DB Error] Failed to log error state for '{report_type}': {db_err}")
 
     #  Build final_report text summary 
     final_report_str = _build_final_report_text(project_id, generated_reports, registry)
