@@ -83,19 +83,39 @@ NIM_MODEL_ROUTING: Dict[str, str] = {
 }
 
 def print_nim_model_dispatch_table() -> None:
-    """Prints the full agent -> model dispatch table once at pipeline start."""
+    """Prints the exhaustive agent -> model dispatch table once at pipeline start."""
+    pipeline_nodes = [
+        ("Planning Agent", "LLM"),
+        ("Orchestrator Agent", "LLM"),
+        ("Research Agent", "RAG / Tavily"),
+        ("Finance Agent", "LLM"),
+        ("Strategy Agent", "LLM"),
+        ("Marketing Agent", "LLM"),
+        ("Risk Agent", "LLM"),
+        ("Council Agent", "LLM"),
+        ("Reviewer Agent", "LLM"),
+        ("Critic Agent", "LLM"),
+        ("Business Rules Engine", "LLM"),
+        ("Analytics & Scoring", "Engine"),
+        ("Report Generator", "LLM"),
+    ]
     print("\n==========================================================================")
     print("=== AI VENTURE STUDIO — NVIDIA NIM MODEL DISPATCH ROUTING TABLE ===")
     print("==========================================================================")
-    print(f"{'Agent / Node':<30} | {'Assigned Model ID':<42}")
+    print(f"{'Agent / Node':<30} | {'Assigned Model / Engine':<42}")
     print("-" * 75)
-    for agent, model in NIM_MODEL_ROUTING.items():
-        if agent != "default":
+    for node_name, node_type in pipeline_nodes:
+        if node_type == "RAG / Tavily":
+            model_display = "(cached / no LLM)"
+        elif node_type == "Engine":
+            model_display = "(Python Engine)"
+        else:
+            model = NIM_MODEL_ROUTING.get(node_name, NIM_MODEL_ROUTING["default"])
             thinking_suffix = ""
             if model == "deepseek-ai/deepseek-v4-pro":
-                thinking_suffix = " (Thinking Mode: ON)" if ENABLE_DEEPSEEK_THINKING_MODE else " (Thinking Mode: OFF)"
-            print(f"{agent:<30} | {model + thinking_suffix:<42}")
-    print(f"{'[Default Fallback]':<30} | {NIM_MODEL_ROUTING['default']:<42}")
+                thinking_suffix = " [thinking-mode ON]" if ENABLE_DEEPSEEK_THINKING_MODE else " [thinking-mode OFF]"
+            model_display = f"{model}{thinking_suffix}"
+        print(f"{node_name:<30} | {model_display:<42}")
     print("==========================================================================\n")
 
 def call_nvidia_nim(
