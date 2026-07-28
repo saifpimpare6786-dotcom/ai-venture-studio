@@ -159,6 +159,7 @@ def execute_pipeline(initial_state: Dict[str, Any]) -> Dict[str, Any]:
         result.get("pipeline_aborted") — True if a hard-gate fired.
         result.get("abort_reason")     — Human-readable explanation.
     """
-    from services.llm import reset_gemini_circuit_breaker
+    from services.llm import reset_gemini_circuit_breaker, print_nim_model_dispatch_table
     reset_gemini_circuit_breaker()
+    print_nim_model_dispatch_table()
     return app.invoke(initial_state)

@@ -72,11 +72,35 @@ def call_gemini(
             
     raise RuntimeError("Gemini API call failed after maximum retries.")
 
+# Toggleable flag for DeepSeek-v4-pro thinking mode (can be disabled independently for Finance/Risk)
+ENABLE_DEEPSEEK_THINKING_MODE: bool = True
+
 # Dynamic NIM model routing dictionary mapping agent types to optimized NVIDIA NIM models
 NIM_MODEL_ROUTING: Dict[str, str] = {
+    "Strategy Agent": "moonshotai/kimi-k2.6",
+    "Orchestrator Agent": "moonshotai/kimi-k2.6",
     "Marketing Agent": "deepseek-ai/deepseek-v4-flash",
+    "Finance Agent": "deepseek-ai/deepseek-v4-pro",
+    "Risk Agent": "deepseek-ai/deepseek-v4-pro",
+    "Business Rules Engine": "mistralai/mistral-large-3-675b-instruct-2512",
     "default": "meta/llama-3.1-70b-instruct",
 }
+
+def print_nim_model_dispatch_table() -> None:
+    """Prints the full agent -> model dispatch table once at pipeline start."""
+    print("\n==========================================================================")
+    print("=== AI VENTURE STUDIO — NVIDIA NIM MODEL DISPATCH ROUTING TABLE ===")
+    print("==========================================================================")
+    print(f"{'Agent / Node':<30} | {'Assigned Model ID':<42}")
+    print("-" * 75)
+    for agent, model in NIM_MODEL_ROUTING.items():
+        if agent != "default":
+            thinking_suffix = ""
+            if model == "deepseek-ai/deepseek-v4-pro":
+                thinking_suffix = " (Thinking Mode: ON)" if ENABLE_DEEPSEEK_THINKING_MODE else " (Thinking Mode: OFF)"
+            print(f"{agent:<30} | {model + thinking_suffix:<42}")
+    print(f"{'[Default Fallback]':<30} | {NIM_MODEL_ROUTING['default']:<42}")
+    print("==========================================================================\n")
 
 def call_nvidia_nim(
     prompt: str,
@@ -122,6 +146,10 @@ def call_nvidia_nim(
         "temperature": 0.2,
         "max_tokens": max_tokens
     }
+    if model_id == "deepseek-ai/deepseek-v4-pro" and ENABLE_DEEPSEEK_THINKING_MODE:
+        payload["chat_template_kwargs"] = {"enable_thinking": True}
+        print(f"[NVIDIA NIM] Enabled DeepSeek thinking-mode for '{agent_name}'")
+
     if response_format:
         payload["response_format"] = response_format
     elif json_mode:
