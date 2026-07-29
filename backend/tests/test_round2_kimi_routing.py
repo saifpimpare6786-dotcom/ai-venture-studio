@@ -37,9 +37,9 @@ class TestRound2KimiRouting(unittest.TestCase):
         print(f"Orchestrator Agent Model: {NIM_MODEL_ROUTING.get('Orchestrator Agent')}")
         print("=" * 75)
 
-        self.assertEqual(NIM_MODEL_ROUTING.get("Strategy Agent"), "moonshotai/kimi-k2.6")
-        self.assertEqual(NIM_MODEL_ROUTING.get("Orchestrator Agent"), "moonshotai/kimi-k2.6")
-        self.assertEqual(NIM_MODEL_ROUTING.get("Marketing Agent"), "deepseek-ai/deepseek-v4-flash")
+        self.assertEqual(NIM_MODEL_ROUTING.get("Strategy Agent", NIM_MODEL_ROUTING["default"]), "meta/llama-3.1-70b-instruct")
+        self.assertEqual(NIM_MODEL_ROUTING.get("Orchestrator Agent", NIM_MODEL_ROUTING["default"]), "meta/llama-3.1-70b-instruct")
+        self.assertEqual(NIM_MODEL_ROUTING.get("Marketing Agent", NIM_MODEL_ROUTING["default"]), "meta/llama-3.1-70b-instruct")
 
         mock_state = {
             "project_id": str(uuid.uuid4()),

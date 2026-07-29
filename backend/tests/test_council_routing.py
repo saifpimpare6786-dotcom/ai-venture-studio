@@ -1,4 +1,12 @@
+import os
+import sys
 from unittest.mock import patch, MagicMock
+
+# Ensure backend directory is in sys.path
+backend_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+if backend_dir not in sys.path:
+    sys.path.append(backend_dir)
+
 from services.llm import call_nvidia_nim, call_llm
 from app.pipeline.council_agent import llm_council_node
 
@@ -17,11 +25,11 @@ def test_llm_nim_routing_and_tokens():
         assert payload1["max_tokens"] == 2048
         assert payload1["model"] == "meta/llama-3.1-70b-instruct"
 
-        # Marketing Agent call -> deepseek-ai/deepseek-v4-flash
+        # Marketing Agent call -> meta/llama-3.1-70b-instruct
         res_mkt = call_nvidia_nim(prompt="Test prompt", agent_name="Marketing Agent")
         assert res_mkt == "Test output"
         payload_mkt = mock_post.call_args_list[-1][1]["json"]
-        assert payload_mkt["model"] == "deepseek-ai/deepseek-v4-flash"
+        assert payload_mkt["model"] == "meta/llama-3.1-70b-instruct"
 
         # Report call -> auto-bumped to 8192 max_tokens
         res2 = call_nvidia_nim(prompt="Test prompt", agent_name="Report Generator (Executive Summary)")

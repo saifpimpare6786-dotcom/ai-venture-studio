@@ -3,11 +3,18 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.core.config import settings
 from app.api import projects, documents, reports
 
+from services.llm import print_nim_model_dispatch_table
+
 app = FastAPI(
     title=settings.PROJECT_NAME,
     description="Backend API for AI Venture Studio",
     version="1.0.0"
 )
+
+@app.on_event("startup")
+def startup_event():
+    """Prints the NIM model dispatch routing table on application startup."""
+    print_nim_model_dispatch_table()
 
 # CORS configuration to allow local development and Vercel hosting origins
 app.add_middleware(

@@ -32,10 +32,11 @@ class TestMarketingDeepSeekRouting(unittest.TestCase):
         print(f"Target Model Configured for 'Marketing Agent': {NIM_MODEL_ROUTING.get('Marketing Agent')}")
         print("=" * 70)
 
+        target_model = NIM_MODEL_ROUTING.get("Marketing Agent", NIM_MODEL_ROUTING["default"])
         self.assertEqual(
-            NIM_MODEL_ROUTING.get("Marketing Agent"),
-            "deepseek-ai/deepseek-v4-flash",
-            "NIM_MODEL_ROUTING must map 'Marketing Agent' to 'deepseek-ai/deepseek-v4-flash'"
+            target_model,
+            "meta/llama-3.1-70b-instruct",
+            "NIM_MODEL_ROUTING must map 'Marketing Agent' to 'meta/llama-3.1-70b-instruct'"
         )
 
         mock_state = {

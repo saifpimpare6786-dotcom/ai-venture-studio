@@ -72,22 +72,24 @@ def call_gemini(
             
     raise RuntimeError("Gemini API call failed after maximum retries.")
 
-# Toggleable flag for DeepSeek-v4-pro thinking mode (can be disabled independently for Finance/Risk)
-ENABLE_DEEPSEEK_THINKING_MODE: bool = True
+# Toggleable flag for DeepSeek-v4-pro thinking mode (disabled by default; retained as optional enhancement)
+# ENABLE_DEEPSEEK_THINKING_MODE: bool = True
+ENABLE_DEEPSEEK_THINKING_MODE: bool = False
 
 # Dynamic NIM model routing dictionary mapping agent types to optimized NVIDIA NIM models
 NIM_MODEL_ROUTING: Dict[str, str] = {
-    "Finance Agent": "deepseek-ai/deepseek-v4-pro",
-    "Risk Agent": "deepseek-ai/deepseek-v4-pro",
+    # Optional enhancement (disabled due to intermittent NVIDIA read timeouts with thinking-mode):
+    # "Finance Agent": "deepseek-ai/deepseek-v4-pro",
+    # "Risk Agent": "deepseek-ai/deepseek-v4-pro",
     "default": "meta/llama-3.1-70b-instruct",
 }
 
 def print_nim_model_dispatch_table() -> None:
-    """Prints the exhaustive agent -> model dispatch table once at pipeline start."""
+    """Prints the exhaustive 13-agent -> model dispatch table at startup."""
     pipeline_nodes = [
         ("Planning Agent", "LLM"),
         ("Orchestrator Agent", "LLM"),
-        ("Research Agent", "RAG / Tavily"),
+        ("Research Agent", "LLM"),
         ("Finance Agent", "LLM"),
         ("Strategy Agent", "LLM"),
         ("Marketing Agent", "LLM"),
@@ -96,7 +98,7 @@ def print_nim_model_dispatch_table() -> None:
         ("Reviewer Agent", "LLM"),
         ("Critic Agent", "LLM"),
         ("Business Rules Engine", "LLM"),
-        ("Analytics & Scoring", "Engine"),
+        ("Analytics & Scoring", "LLM"),
         ("Report Generator", "LLM"),
     ]
     print("\n==========================================================================")
@@ -105,16 +107,11 @@ def print_nim_model_dispatch_table() -> None:
     print(f"{'Agent / Node':<30} | {'Assigned Model / Engine':<42}")
     print("-" * 75)
     for node_name, node_type in pipeline_nodes:
-        if node_type == "RAG / Tavily":
-            model_display = "(cached / no LLM)"
-        elif node_type == "Engine":
-            model_display = "(Python Engine)"
-        else:
-            model = NIM_MODEL_ROUTING.get(node_name, NIM_MODEL_ROUTING["default"])
-            thinking_suffix = ""
-            if model == "deepseek-ai/deepseek-v4-pro":
-                thinking_suffix = " [thinking-mode ON]" if ENABLE_DEEPSEEK_THINKING_MODE else " [thinking-mode OFF]"
-            model_display = f"{model}{thinking_suffix}"
+        model = NIM_MODEL_ROUTING.get(node_name, NIM_MODEL_ROUTING["default"])
+        thinking_suffix = ""
+        if model == "deepseek-ai/deepseek-v4-pro":
+            thinking_suffix = " [thinking-mode ON]" if ENABLE_DEEPSEEK_THINKING_MODE else " [thinking-mode OFF]"
+        model_display = f"{model}{thinking_suffix}"
         print(f"{node_name:<30} | {model_display:<42}")
     print("==========================================================================\n")
 
