@@ -15,6 +15,7 @@ class ProjectBase(BaseModel):
     team_size: Optional[int] = Field(1, description="Current size of the founding team")
     goals: Optional[List[str]] = Field(default_factory=list, description="Targeted business milestones")
     preferred_funding: Optional[str] = Field(None, description="Preferred source/type of funding")
+    status: Optional[str] = Field("idle", description="Project analysis status (idle, running, complete, failed)")
 
 class ProjectCreate(ProjectBase):
     pass

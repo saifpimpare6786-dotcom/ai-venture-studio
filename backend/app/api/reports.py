@@ -9,12 +9,13 @@ router = APIRouter(prefix="/reports", tags=["reports"])
 
 def run_pipeline_background(project_id: str, project_record: Dict[str, Any]):
     """Orchestrates the LangGraph execution in the background to prevent HTTP timeouts."""
+    supabase = get_supabase_client()
     try:
         from app.pipeline.graph import execute_pipeline
         from app.pipeline.specialized_agents import retrieve_context
         
-        # Manually create profile bypass check to ensure logs references won't fail key constraints
-        supabase = get_supabase_client()
+        # Set project status to 'running'
+        supabase.table("projects").update({"status": "running"}).eq("id", project_id).execute()
         
         # Log Pipeline start
         supabase.table("agent_logs").insert({
@@ -26,7 +27,6 @@ def run_pipeline_background(project_id: str, project_record: Dict[str, Any]):
         }).execute()
         
         # Construct initial pipeline state
-        # Map fields to match Planning and specialized nodes
         initial_state = {
             "project_id": project_id,
             "business_idea_input": (
@@ -54,11 +54,34 @@ def run_pipeline_background(project_id: str, project_record: Dict[str, Any]):
             "force_refresh": False
         }
         
-        execute_pipeline(initial_state)
-        print(f"Background pipeline execution succeeded for project: {project_id}")
+        final_state = execute_pipeline(initial_state)
+        
+        # Check if pipeline was aborted by a hard gate (e.g. GATE 1 or GATE 2)
+        if final_state and final_state.get("pipeline_aborted"):
+            abort_reason = final_state.get("abort_reason", "Pipeline aborted at gate")
+            print(f"Background pipeline aborted for project {project_id}: {abort_reason}")
+            supabase.table("projects").update({"status": "failed"}).eq("id", project_id).execute()
+            supabase.table("agent_logs").insert({
+                "project_id": project_id,
+                "agent_name": "Pipeline Orchestrator",
+                "status": "failed",
+                "input_data": {},
+                "output_data": {"reason": abort_reason}
+            }).execute()
+        else:
+            print(f"Background pipeline execution succeeded for project: {project_id}")
+            supabase.table("projects").update({"status": "complete"}).eq("id", project_id).execute()
+            supabase.table("agent_logs").insert({
+                "project_id": project_id,
+                "agent_name": "Pipeline Orchestrator",
+                "status": "completed",
+                "input_data": {},
+                "output_data": {"message": "All reports generated successfully."}
+            }).execute()
     except Exception as e:
         print(f"Background pipeline failed for project {project_id}: {str(e)}")
         try:
+            supabase.table("projects").update({"status": "failed"}).eq("id", project_id).execute()
             supabase.table("agent_logs").insert({
                 "project_id": project_id,
                 "agent_name": "Pipeline Orchestrator",
@@ -85,6 +108,28 @@ def get_project_reports(project_id: str, current_user = Depends(get_current_user
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+@router.get("/project/{project_id}/status")
+def get_project_status(project_id: str, current_user = Depends(get_current_user)):
+    """Retrieves the current status of a project along with any reports generated so far."""
+    supabase = get_supabase_client()
+    
+    # Verify project ownership & fetch status
+    project = supabase.table("projects").select("user_id, status").eq("id", project_id).execute()
+    if not project.data or project.data[0]["user_id"] != current_user.id:
+        raise HTTPException(status_code=404, detail="Project not found or user lacks permission")
+        
+    project_status = project.data[0].get("status") or "idle"
+    
+    try:
+        reports_res = supabase.table("reports").select("*").eq("project_id", project_id).execute()
+        return {
+            "project_id": project_id,
+            "status": project_status,
+            "reports": reports_res.data if reports_res.data else []
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 @router.post("/project/{project_id}/generate", status_code=status.HTTP_202_ACCEPTED)
 def trigger_generation(
     project_id: str, 
@@ -92,7 +137,7 @@ def trigger_generation(
     sync: bool = False,
     current_user = Depends(get_current_user)
 ):
-    """Triggers the full multi-agent boardroom analysis pipeline (Background or Synchronous)."""
+    """Triggers the full multi-agent boardroom analysis pipeline asynchronously as a background job."""
     supabase = get_supabase_client()
     
     # Verify project ownership
@@ -102,14 +147,30 @@ def trigger_generation(
         
     project_record = project.data[0]
     
+    # Immediately set project status to 'running'
+    supabase.table("projects").update({"status": "running"}).eq("id", project_id).execute()
+    
     if sync:
         # Run synchronously (primarily for unit/integration testing)
         run_pipeline_background(project_id, project_record)
-        return {"status": "success", "message": "Pipeline ran synchronously."}
+        
+        # Check current status after sync execution
+        updated_proj = supabase.table("projects").select("status").eq("id", project_id).execute()
+        current_status = updated_proj.data[0].get("status", "complete") if updated_proj.data else "complete"
+        
+        return {
+            "project_id": project_id,
+            "status": current_status,
+            "message": "Pipeline ran synchronously."
+        }
     else:
-        # Run asynchronously in background tasks
+        # Start pipeline execution in FastAPI background tasks and return immediately
         background_tasks.add_task(run_pipeline_background, project_id, project_record)
-        return {"status": "processing", "message": "Venture analysis and report generation triggered."}
+        return {
+            "project_id": project_id,
+            "status": "running",
+            "message": "Venture analysis and report generation triggered."
+        }
 
 @router.get("/project/{project_id}/logs")
 def get_project_logs(project_id: str, current_user = Depends(get_current_user)):

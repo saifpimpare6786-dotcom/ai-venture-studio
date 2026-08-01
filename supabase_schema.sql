@@ -37,6 +37,7 @@ CREATE TABLE IF NOT EXISTS public.projects (
     team_size INT DEFAULT 1,
     goals TEXT[],
     preferred_funding VARCHAR(100),
+    status VARCHAR(50) DEFAULT 'idle',
     created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL,
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
 );
