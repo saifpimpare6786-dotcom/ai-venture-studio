@@ -13,6 +13,8 @@ def create_project(project: ProjectCreate, current_user = Depends(get_current_us
     project_data = project.model_dump()
     project_data["user_id"] = current_user.id
     
+    print(f"[CREATE_PROJECT] Inserting project for authenticated user_id: {current_user.id} (email: {getattr(current_user, 'email', 'N/A')})")
+    
     try:
         response = supabase.table("projects").insert(project_data).execute()
         if not response.data:
