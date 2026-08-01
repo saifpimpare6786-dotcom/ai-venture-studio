@@ -19,6 +19,10 @@ class Settings(BaseSettings):
     TAVILY_API_KEY: Optional[str] = None
     CHROMA_DB_PATH: str = "./chroma_db"
     PORT: int = 8000
+    CORS_ORIGINS: str = Field(
+        default="http://localhost:5173,http://localhost:3000,http://127.0.0.1:5173",
+        description="Comma-separated list of allowed CORS origins"
+    )
     
     # Allow reading from a .env file if it exists
     model_config = SettingsConfigDict(

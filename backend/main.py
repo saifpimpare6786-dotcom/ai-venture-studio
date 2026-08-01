@@ -16,10 +16,12 @@ def startup_event():
     """Prints the NIM model dispatch routing table on application startup."""
     print_nim_model_dispatch_table()
 
-# CORS configuration to allow local development and Vercel hosting origins
+# CORS configuration to allow local development (http://localhost:5173) and production deployment origins
+allowed_origins = [origin.strip() for origin in settings.CORS_ORIGINS.split(",") if origin.strip()]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Restrict to specific domains in a production configuration
+    allow_origins=allowed_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
