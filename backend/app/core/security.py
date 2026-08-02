@@ -1,19 +1,28 @@
-from fastapi import Header, HTTPException, status
+from typing import Optional
+from fastapi import Header, Query, HTTPException, status
 from app.database.supabase import get_supabase_client
 
-def get_current_user(authorization: str = Header(...)):
+def get_current_user(
+    authorization: Optional[str] = Header(None),
+    key: Optional[str] = Query(None)
+):
     """
-    FastAPI dependency to extract and verify the JWT bearer token from the authorization header.
+    FastAPI dependency to extract and verify the JWT bearer token from the authorization header or 'key' query parameter.
     Calls Supabase Auth to confirm the session validity.
     Returns the authenticated user details.
     """
-    if not authorization.startswith("Bearer "):
+    token = None
+    if authorization and authorization.startswith("Bearer "):
+        token = authorization.split(" ")[1]
+    elif key:
+        token = key
+
+    if not token:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Authorization header must start with 'Bearer '"
+            detail="Authorization header or 'key' query parameter required."
         )
-    
-    token = authorization.split(" ")[1]
+
     supabase = get_supabase_client()
     try:
         user_response = supabase.auth.get_user(token)
@@ -28,3 +37,4 @@ def get_current_user(authorization: str = Header(...)):
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail=f"Session authentication failed: {str(e)}"
         )
+

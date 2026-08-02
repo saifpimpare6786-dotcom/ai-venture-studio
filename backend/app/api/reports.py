@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, status
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, Response
 from app.core.security import get_current_user
 from app.database.supabase import get_supabase_client
 from services.export_generator import generate_docx, generate_pptx, generate_pdf
@@ -96,39 +96,54 @@ def run_pipeline_background(project_id: str, project_record: Dict[str, Any]):
 def get_project_reports(project_id: str, current_user = Depends(get_current_user)):
     """Retrieves all generated reports and score rubrics for a specific project."""
     supabase = get_supabase_client()
-    
-    # Verify project ownership
-    project = supabase.table("projects").select("user_id").eq("id", project_id).execute()
-    if not project.data or project.data[0]["user_id"] != current_user.id:
-        raise HTTPException(status_code=404, detail="Project not found or user lacks permission")
-        
     try:
+        # Verify project ownership
+        project = supabase.table("projects").select("user_id").eq("id", project_id).execute()
+        if not project.data or project.data[0]["user_id"] != current_user.id:
+            raise HTTPException(status_code=404, detail="Project not found or user lacks permission")
+            
         response = supabase.table("reports").select("*").eq("project_id", project_id).execute()
         return response.data
+    except HTTPException:
+        raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        err_str = str(e)
+        err_type = type(e).__name__
+        if "ConnectError" in err_type or "ConnectError" in err_str or "10054" in err_str or "connection forcibly closed" in err_str.lower():
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Database connection transient error. Please retry."
+            )
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=err_str)
 
 @router.get("/project/{project_id}/status")
 def get_project_status(project_id: str, current_user = Depends(get_current_user)):
     """Retrieves the current status of a project along with any reports generated so far."""
     supabase = get_supabase_client()
-    
-    # Verify project ownership & fetch status
-    project = supabase.table("projects").select("user_id, status").eq("id", project_id).execute()
-    if not project.data or project.data[0]["user_id"] != current_user.id:
-        raise HTTPException(status_code=404, detail="Project not found or user lacks permission")
-        
-    project_status = project.data[0].get("status") or "idle"
-    
     try:
+        # Verify project ownership & fetch status
+        project = supabase.table("projects").select("user_id, status").eq("id", project_id).execute()
+        if not project.data or project.data[0]["user_id"] != current_user.id:
+            raise HTTPException(status_code=404, detail="Project not found or user lacks permission")
+            
+        project_status = project.data[0].get("status") or "idle"
         reports_res = supabase.table("reports").select("*").eq("project_id", project_id).execute()
         return {
             "project_id": project_id,
             "status": project_status,
             "reports": reports_res.data if reports_res.data else []
         }
+    except HTTPException:
+        raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        err_str = str(e)
+        err_type = type(e).__name__
+        if "ConnectError" in err_type or "ConnectError" in err_str or "10054" in err_str or "connection forcibly closed" in err_str.lower():
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Database connection transient error. Please retry."
+            )
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=err_str)
 
 @router.post("/project/{project_id}/generate", status_code=status.HTTP_202_ACCEPTED)
 def trigger_generation(
@@ -176,21 +191,29 @@ def trigger_generation(
 def get_project_logs(project_id: str, current_user = Depends(get_current_user)):
     """Retrieves execution logs sorted chronologically for boardroom livestream streaming."""
     supabase = get_supabase_client()
-    
-    # Verify ownership
-    project = supabase.table("projects").select("user_id").eq("id", project_id).execute()
-    if not project.data or project.data[0]["user_id"] != current_user.id:
-        raise HTTPException(status_code=404, detail="Project not found or user lacks permission")
-        
     try:
+        # Verify ownership
+        project = supabase.table("projects").select("user_id").eq("id", project_id).execute()
+        if not project.data or project.data[0]["user_id"] != current_user.id:
+            raise HTTPException(status_code=404, detail="Project not found or user lacks permission")
+            
         response = supabase.table("agent_logs").select("*").eq("project_id", project_id).order("created_at", desc=False).execute()
         return response.data
+    except HTTPException:
+        raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        err_str = str(e)
+        err_type = type(e).__name__
+        if "ConnectError" in err_type or "ConnectError" in err_str or "10054" in err_str or "connection forcibly closed" in err_str.lower():
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Database connection transient error. Please retry."
+            )
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=err_str)
 
 @router.get("/{report_id}/download/{format}")
 def download_report(report_id: str, format: str, current_user = Depends(get_current_user)):
-    """Streams a generated report in Word (.docx), PowerPoint (.pptx), or PDF (.pdf) format."""
+    """Streams a generated report in Word (.docx), PowerPoint (.pptx), or PDF (.pdf) format as raw binary attachment."""
     supabase = get_supabase_client()
     
     # Fetch report
@@ -226,27 +249,30 @@ def download_report(report_id: str, format: str, current_user = Depends(get_curr
         section_labels = {}
     
     clean_filename = f"{project_name.replace(' ', '_')}_{report_type.replace(' ', '_')}"
-    
-    if format.lower() == "docx":
+    fmt = format.lower()
+
+    if fmt == "docx":
         file_stream = generate_docx(report_type, content, project_name, section_labels)
-        return StreamingResponse(
-            file_stream,
-            media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-            headers={"Content-Disposition": f"attachment; filename={clean_filename}.docx"}
-        )
-    elif format.lower() == "pptx":
+        media_type = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        filename = f"{clean_filename}.docx"
+    elif fmt == "pptx":
         file_stream = generate_pptx(report_type, content, project_name, section_labels)
-        return StreamingResponse(
-            file_stream,
-            media_type="application/vnd.openxmlformats-officedocument.presentationml.presentation",
-            headers={"Content-Disposition": f"attachment; filename={clean_filename}.pptx"}
-        )
-    elif format.lower() == "pdf":
+        media_type = "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+        filename = f"{clean_filename}.pptx"
+    elif fmt == "pdf":
         file_stream = generate_pdf(report_type, content, project_name, section_labels)
-        return StreamingResponse(
-            file_stream,
-            media_type="application/pdf",
-            headers={"Content-Disposition": f"attachment; filename={clean_filename}.pdf"}
-        )
+        media_type = "application/pdf"
+        filename = f"{clean_filename}.pdf"
     else:
         raise HTTPException(status_code=400, detail="Unsupported download format. Options: docx, pptx, pdf")
+
+    raw_bytes = file_stream.getvalue()
+    return Response(
+        content=raw_bytes,
+        media_type=media_type,
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"',
+            "Access-Control-Expose-Headers": "Content-Disposition"
+        }
+    )
+

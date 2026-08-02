@@ -1457,8 +1457,8 @@ def report_generator_node(state: AgentState) -> Dict[str, Any]:
     """
     Report Generator Node -- SKILL.md registry pattern.
 
-    Generates 5 priority report types (Executive Summary, Business Plan, SWOT,
-    Financial Projection, Investment Readiness) from validated pipeline output.
+    Generates all 13 report types defined in the shared report registry
+    from validated pipeline output.
 
     Contract:
     - Only runs after Business Rules Engine has validated the pipeline output.
@@ -1675,16 +1675,13 @@ def _upsert_report(
 
 def _record_pipeline_abort(supabase, project_id: str, abort_reason: str, scores: dict) -> None:
     """Write Failed status for all report types when pipeline was aborted upstream."""
-    registry_keys = [
-        "Executive Summary",
-        "Business Plan",
-        "SWOT Analysis",
-        "Financial Projection",
-        "Investment Readiness Report",
-        "Business Model Canvas",
-        "PESTLE Analysis",
-        "Porter's Five Forces",
-    ]
+    _dummy_context = {k: "" for k in [
+        "idea", "strategy", "finance", "marketing", "risk",
+        "council_str", "reviewer", "critic", "rules_json",
+        "scores_json", "overall_score"
+    ]}
+    _dummy_context["overall_score"] = 0.0
+    registry_keys = list(_build_registry(_dummy_context).keys())
     for report_type in registry_keys:
         _upsert_report(
             supabase,
