@@ -5,19 +5,57 @@ from typing import Dict, Any, Union, List, Tuple
 from app.core.config import settings
 
 # Per-run Provider Key Rotation State
+_groq_key_index: int = 0
 _nvidia_key_index: int = 0
 _gemini_key_index: int = 0
+_groq_exhausted_indices: set = set()
 _nvidia_exhausted_indices: set = set()
 _gemini_exhausted_indices: set = set()
 
 def reset_llm_key_rotation() -> None:
-    """Resets key indices and exhausted key sets for NVIDIA NIM and Gemini."""
-    global _nvidia_key_index, _gemini_key_index
-    global _nvidia_exhausted_indices, _gemini_exhausted_indices
+    """Resets key indices and exhausted key sets for Groq, NVIDIA NIM, and Gemini."""
+    global _groq_key_index, _nvidia_key_index, _gemini_key_index
+    global _groq_exhausted_indices, _nvidia_exhausted_indices, _gemini_exhausted_indices
+    _groq_key_index = 0
     _nvidia_key_index = 0
     _gemini_key_index = 0
+    _groq_exhausted_indices = set()
     _nvidia_exhausted_indices = set()
     _gemini_exhausted_indices = set()
+
+def _get_active_groq_key() -> Tuple[int, str]:
+    """Returns (key_index, api_key) for the current active Groq key, or raises RuntimeError if all exhausted."""
+    keys = settings.get_groq_keys()
+    if not keys:
+        raise RuntimeError("No Groq API keys configured.")
+    global _groq_key_index, _groq_exhausted_indices
+    num_keys = len(keys)
+    for i in range(num_keys):
+        idx = (_groq_key_index + i) % num_keys
+        if idx not in _groq_exhausted_indices:
+            _groq_key_index = idx
+            return (idx, keys[idx])
+    raise RuntimeError(f"All {num_keys} Groq API key(s) exhausted for this run.")
+
+def _mark_groq_key_exhausted(idx: int, reason: str) -> None:
+    """Marks Groq key as exhausted and advances key index."""
+    global _groq_key_index, _groq_exhausted_indices
+    _groq_exhausted_indices.add(idx)
+    keys = settings.get_groq_keys()
+    num_keys = len(keys)
+    
+    next_idx = None
+    for i in range(num_keys):
+        cand = (idx + 1 + i) % num_keys
+        if cand not in _groq_exhausted_indices:
+            next_idx = cand
+            break
+            
+    if next_idx is not None:
+        _groq_key_index = next_idx
+        print(f"[Key Rotation] Groq key {idx + 1} {reason} — rotating to key {next_idx + 1}")
+    else:
+        print(f"[Key Rotation] Groq key {idx + 1} {reason} — ALL {num_keys} Groq key(s) exhausted for this run.")
 
 def _get_active_nvidia_key() -> Tuple[int, str]:
     """Returns (key_index, api_key) for the current active NVIDIA key, or raises RuntimeError if all exhausted."""
@@ -283,6 +321,84 @@ def call_nvidia_nim(
         if not key_rotated:
             raise RuntimeError(f"NVIDIA NIM call failed after maximum retries for model {model_id}.")
 
+def call_groq(
+    prompt: str,
+    system_prompt: str = None,
+    agent_name: str = None,
+    max_tokens: int = 2048,
+    json_mode: bool = False,
+    response_format: dict = None,
+) -> str:
+    """
+    Calls the Groq API (llama-3.3-70b-versatile) with built-in key rotation and rate limit handling.
+    
+    Args:
+        agent_name: Agent name or type (for logging/context).
+        max_tokens: Token budget for completion. Default 2048. Auto-bumped to 8192 if agent_name
+                    contains "report" or "council".
+        json_mode: If True, sets response_format to {"type": "json_object"}.
+        response_format: Custom response format payload for structured output.
+    """
+    url = "https://api.groq.com/openai/v1/chat/completions"
+    model_id = "llama-3.3-70b-versatile"
+    print(f"[Groq] Dispatching call -> llama-3.3-70b-versatile")
+    
+    if agent_name and any(k in agent_name.lower() for k in ("report", "council")):
+        if max_tokens < 8192:
+            max_tokens = 8192
+            
+    messages = []
+    if system_prompt:
+        messages.append({"role": "system", "content": system_prompt})
+    messages.append({"role": "user", "content": prompt})
+    
+    payload: Dict[str, Any] = {
+        "model": model_id,
+        "messages": messages,
+        "temperature": 0.2,
+        "max_tokens": max_tokens
+    }
+
+    if response_format:
+        payload["response_format"] = response_format
+    elif json_mode:
+        payload["response_format"] = {"type": "json_object"}
+
+    while True:
+        key_idx, api_key = _get_active_groq_key()
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json"
+        }
+        
+        max_retries = 3
+        backoff = 1.0
+        key_rotated = False
+        
+        for attempt in range(max_retries):
+            try:
+                response = httpx.post(url, json=payload, headers=headers, timeout=120.0)
+                if response.status_code == 200:
+                    res_data = response.json()
+                    return res_data["choices"][0]["message"]["content"]
+                elif response.status_code in (400, 401, 403, 429):
+                    reason = f"quota-exhausted ({response.status_code})" if response.status_code == 429 else f"auth/key error ({response.status_code})"
+                    _mark_groq_key_exhausted(key_idx, reason)
+                    key_rotated = True
+                    break  # Break retry loop to try call with NEXT rotated key
+                else:
+                    raise ValueError(f"Groq API error (Status {response.status_code}): {response.text}")
+            except Exception as e:
+                if key_rotated:
+                    break
+                if attempt == max_retries - 1:
+                    raise e
+                time.sleep(backoff)
+                backoff *= 2.0
+
+        if not key_rotated:
+            raise RuntimeError(f"Groq API call failed after maximum retries for model {model_id}.")
+
 def _clean_ollama_qwen_response(raw_text: str, json_mode: bool = False) -> str:
     """
     Cleans raw response from local Qwen3 model:
@@ -390,22 +506,40 @@ def call_llm(
     json_mode: bool = False,
 ) -> Union[str, Dict[str, Any]]:
     """
-    Wrapper offering failover. If preferred model provider fails,
-    it automatically falls back to the other model provider.
-    If BOTH providers fail, it does not raise an exception — instead:
+    Wrapper offering multi-provider failover: Groq (PRIMARY) -> NVIDIA NIM / Gemini -> Ollama (Local).
+    If preferred model provider fails, it automatically falls back through the provider chain.
+    If ALL providers fail, it does not raise an exception — instead:
       1. Logs the failure transaction to Supabase agent_logs (if project_id & agent_name are passed).
       2. Returns a structured error dictionary: {"status": "failed", "error": "Error details..."}
     """
+    groq_err = None
     primary_err = None
     fallback_err = None
+    ollama_err = None
 
+    # 1. Execute Groq primary cloud call (First in chain)
+    try:
+        resp_fmt = response_schema if (isinstance(response_schema, dict) and "type" in response_schema) else None
+        return call_groq(
+            prompt,
+            system_prompt=system_prompt,
+            agent_name=agent_name,
+            max_tokens=max_tokens,
+            json_mode=json_mode,
+            response_format=resp_fmt
+        )
+    except Exception as e:
+        groq_err = str(e)
+        print(f"WARNING: Groq API failed. Falling back to secondary cloud provider. Error: {groq_err}")
+
+    # 2. Existing cloud provider failover chain (NVIDIA NIM / Gemini)
     effective_provider = preferred_provider
     if preferred_provider == "gemini" and _gemini_marked_down:
         print("[Circuit Breaker] Gemini marked DOWN for this run — routing NVIDIA-primary.")
         effective_provider = "nvidia"
 
     if effective_provider == "nvidia":
-        # 1. Execute NIM primary
+        # Execute NIM primary
         try:
             return call_nvidia_nim(
                 prompt, system_prompt, agent_name=agent_name, max_tokens=max_tokens, json_mode=json_mode
@@ -414,7 +548,7 @@ def call_llm(
             primary_err = str(e)
             print(f"WARNING: NVIDIA NIM failed. Falling back to Gemini API. Error: {primary_err}")
         
-        # 2. Execute Gemini fallback (only if Gemini is not marked DOWN)
+        # Execute Gemini fallback (only if Gemini is not marked DOWN)
         if not _gemini_marked_down:
             try:
                 res = call_gemini(
@@ -430,7 +564,7 @@ def call_llm(
         else:
             fallback_err = "Gemini marked DOWN (bypassed fallback)."
     else:
-        # 1. Execute Gemini primary
+        # Execute Gemini primary
         try:
             res = call_gemini(
                 prompt, system_prompt, max_tokens=max_tokens,
@@ -443,7 +577,7 @@ def call_llm(
             print(f"WARNING: Gemini API failed. Falling back to NVIDIA NIM. Error: {primary_err}")
             _record_gemini_failure()
         
-        # 2. Execute NIM fallback
+        # Execute NIM fallback
         try:
             return call_nvidia_nim(
                 prompt, system_prompt, agent_name=agent_name, max_tokens=max_tokens, json_mode=json_mode
@@ -452,7 +586,7 @@ def call_llm(
             fallback_err = str(e)
             print(f"ERROR: NVIDIA NIM fallback also failed. Error: {fallback_err}")
 
-    # 3. Last-resort tertiary fallback to local Ollama (qwen3:8b) when BOTH cloud providers are down
+    # 3. Last-resort tertiary fallback to local Ollama (qwen3:8b) when ALL cloud providers fail
     print(f"[Local Fallback] Cloud exhausted — using local Ollama {settings.OLLAMA_MODEL}")
     try:
         return call_ollama(
@@ -462,8 +596,8 @@ def call_llm(
         ollama_err = str(e)
         print(f"ERROR: Local Ollama fallback also failed. Error: {ollama_err}")
 
-    # 4. Triple provider failure cleanup & DB logging
-    combined_error = f"LLM Call Failed. Primary ({preferred_provider}): {primary_err}. Secondary: {fallback_err}. Tertiary (Ollama): {ollama_err}."
+    # 4. Multi-provider failure cleanup & DB logging
+    combined_error = f"LLM Call Failed. Groq: {groq_err}. Primary ({effective_provider}): {primary_err}. Secondary: {fallback_err}. Tertiary (Ollama): {ollama_err}."
     
     if project_id and agent_name:
         try:

@@ -9,6 +9,7 @@ if backend_dir not in sys.path:
 
 from app.core.config import settings
 from services.llm import (
+    call_groq,
     call_nvidia_nim,
     call_gemini,
     call_llm,
@@ -19,6 +20,8 @@ from services.llm import (
 class TestMultiApiKeyRotation(unittest.TestCase):
 
     def setUp(self):
+        self.orig_groq_key = settings.GROQ_API_KEY
+        self.orig_groq_keys = settings.GROQ_API_KEYS
         self.orig_nim_key = settings.NVIDIA_NIM_API_KEY
         self.orig_nim_keys = settings.NVIDIA_API_KEYS
         self.orig_gemini_key = settings.GEMINI_API_KEY
@@ -26,6 +29,8 @@ class TestMultiApiKeyRotation(unittest.TestCase):
         reset_gemini_circuit_breaker()
 
     def tearDown(self):
+        settings.GROQ_API_KEY = self.orig_groq_key
+        settings.GROQ_API_KEYS = self.orig_groq_keys
         settings.NVIDIA_NIM_API_KEY = self.orig_nim_key
         settings.NVIDIA_API_KEYS = self.orig_nim_keys
         settings.GEMINI_API_KEY = self.orig_gemini_key
@@ -33,19 +38,33 @@ class TestMultiApiKeyRotation(unittest.TestCase):
         reset_gemini_circuit_breaker()
 
     def test_key_parsing_backward_compatibility(self):
+        settings.GROQ_API_KEY = "single_groq_key"
+        settings.GROQ_API_KEYS = None
         settings.NVIDIA_NIM_API_KEY = "single_nvidia_key"
         settings.NVIDIA_API_KEYS = None
         settings.GEMINI_API_KEY = "single_gemini_key"
         settings.GEMINI_API_KEYS = None
 
+        self.assertEqual(settings.get_groq_keys(), ["single_groq_key"])
         self.assertEqual(settings.get_nvidia_keys(), ["single_nvidia_key"])
         self.assertEqual(settings.get_gemini_keys(), ["single_gemini_key"])
 
+        settings.GROQ_API_KEYS = "groq_key1, groq_key2"
         settings.NVIDIA_API_KEYS = "key1, key2 , key3 "
         settings.GEMINI_API_KEYS = "gkey1, gkey2"
 
+        self.assertEqual(settings.get_groq_keys(), ["groq_key1", "groq_key2"])
         self.assertEqual(settings.get_nvidia_keys(), ["key1", "key2", "key3"])
         self.assertEqual(settings.get_gemini_keys(), ["gkey1", "gkey2"])
+
+    def test_groq_key_rotation_on_auth_quota_failure(self):
+        settings.GROQ_API_KEYS = "invalid_groq_key_1, invalid_groq_key_2"
+        reset_llm_key_rotation()
+
+        with self.assertRaises(RuntimeError) as ctx:
+            call_groq("Test ping", agent_name="Unit Test")
+        
+        self.assertIn("exhausted", str(ctx.exception).lower())
 
     def test_nvidia_key_rotation_on_auth_quota_failure(self):
         settings.NVIDIA_API_KEYS = "invalid_nim_key_1, invalid_nim_key_2"
@@ -64,6 +83,20 @@ class TestMultiApiKeyRotation(unittest.TestCase):
             call_gemini("Test ping")
         
         self.assertIn("exhausted", str(ctx.exception).lower())
+
+    def test_groq_key_rotation_first_invalid_second_valid(self):
+        real_groq_keys = settings.get_groq_keys()
+        if not real_groq_keys:
+            self.skipTest("No valid Groq key available for live test.")
+        
+        valid_key = real_groq_keys[0]
+        # First key is bogus, second key is valid
+        settings.GROQ_API_KEYS = f"invalid_groq_key_bogus_123, {valid_key}"
+        reset_llm_key_rotation()
+
+        # Call should rotate past key 1 and succeed with key 2
+        result = call_groq("Test ping", agent_name="Rotation Test")
+        self.assertTrue(isinstance(result, str) and len(result) > 0)
 
     def test_nvidia_key_rotation_first_invalid_second_valid(self):
         real_nvidia_keys = settings.get_nvidia_keys()

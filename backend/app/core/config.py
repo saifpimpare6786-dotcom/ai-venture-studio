@@ -14,6 +14,8 @@ class Settings(BaseSettings):
     SUPABASE_SERVICE_ROLE_KEY: str = Field(
         validation_alias=AliasChoices("SUPABASE_SERVICE_ROLE_KEY", "SUPABASE_SECRET_KEY")
     )
+    GROQ_API_KEY: Optional[str] = None
+    GROQ_API_KEYS: Optional[str] = None
     NVIDIA_NIM_API_KEY: Optional[str] = None
     NVIDIA_API_KEYS: Optional[str] = None
     GEMINI_API_KEY: Optional[str] = None
@@ -27,6 +29,15 @@ class Settings(BaseSettings):
         default="http://localhost:5173,http://localhost:3000,http://127.0.0.1:5173",
         description="Comma-separated list of allowed CORS origins"
     )
+
+    def get_groq_keys(self) -> List[str]:
+        """Returns list of configured Groq API keys."""
+        keys = []
+        if self.GROQ_API_KEYS:
+            keys.extend([k.strip() for k in self.GROQ_API_KEYS.split(",") if k.strip()])
+        if not keys and self.GROQ_API_KEY:
+            keys.extend([k.strip() for k in self.GROQ_API_KEY.split(",") if k.strip()])
+        return keys
 
     def get_nvidia_keys(self) -> List[str]:
         """Returns list of configured NVIDIA NIM API keys."""

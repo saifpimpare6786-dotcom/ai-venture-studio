@@ -15,13 +15,17 @@ def run_graceful_failure_tests():
     print("=== Running LLM Graceful Failure Robustness Tests ===")
 
     # 1. Back up original API keys and endpoints
+    original_groq_key = settings.GROQ_API_KEY
+    original_groq_keys = settings.GROQ_API_KEYS
     original_nim_key = settings.NVIDIA_NIM_API_KEY
     original_gemini_key = settings.GEMINI_API_KEY
     original_ollama_url = settings.OLLAMA_BASE_URL
 
     try:
-        # Mock API keys and Ollama URL to force failures across all 3 providers
+        # Mock API keys and Ollama URL to force failures across all providers
         print("\nMocking API keys and Ollama URL to invalid values...")
+        settings.GROQ_API_KEY = None
+        settings.GROQ_API_KEYS = "invalid_groq_key_to_force_failure"
         settings.NVIDIA_NIM_API_KEY = "invalid_nim_key_to_force_failure"
         settings.GEMINI_API_KEY = "invalid_gemini_key_to_force_failure"
         settings.OLLAMA_BASE_URL = "http://localhost:99999"
@@ -36,7 +40,7 @@ def run_graceful_failure_tests():
             print("ERROR: call_llm wrapper did not return the expected failure dictionary!")
             sys.exit(1)
             
-        print("SUCCESS: call_llm handled triple-provider failure and returned a dictionary safely!")
+        print("SUCCESS: call_llm handled multi-provider failure and returned a dictionary safely!")
 
         # 3. Verify Planning Node handles failure dict gracefully
         print("\nTesting Planning Node graceful fallback...")
@@ -74,6 +78,8 @@ def run_graceful_failure_tests():
     finally:
         # Restore original API keys and endpoints
         print("\nRestoring original API keys and configuration...")
+        settings.GROQ_API_KEY = original_groq_key
+        settings.GROQ_API_KEYS = original_groq_keys
         settings.NVIDIA_NIM_API_KEY = original_nim_key
         settings.GEMINI_API_KEY = original_gemini_key
         settings.OLLAMA_BASE_URL = original_ollama_url
