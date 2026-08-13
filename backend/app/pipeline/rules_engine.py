@@ -228,7 +228,7 @@ def fallback_extract_pricing(text: str) -> List[Dict[str, Any]]:
     
     results = []
     curr_pattern = r'(?:[₹$£€]|INR|GBP|USD|EUR|Rs\.?|RS\.?|Rupees?|rupees?)'
-    num_pattern = r'([0-9]{1,3}(?:,[0-9]{2,3})*(?:\.[0-9]+)?)'
+    num_pattern = r'(?<![0-9])([0-9]{1,3}(?:,[0-9]{2,3})*(?:\.[0-9]+)?)'
 
     # 1. First pass: look specifically for monthly pricing patterns (prefix currency)
     monthly_pattern = re.compile(
