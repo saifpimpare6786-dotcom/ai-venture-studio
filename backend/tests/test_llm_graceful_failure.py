@@ -65,7 +65,7 @@ def run_graceful_failure_tests():
         reviewer_res = reviewer_agent_node(mock_state_rev)
         print("Reviewer Node returned keys:", list(reviewer_res.keys()))
         
-        if "Execution failed" not in reviewer_res.get("reviewer_notes", ""):
+        if reviewer_res.get("reviewer_notes") != "__FAILED__":
             print("ERROR: Reviewer Node did not capture the LLM error state!")
             sys.exit(1)
             
