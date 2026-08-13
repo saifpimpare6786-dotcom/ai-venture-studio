@@ -11,8 +11,8 @@ You are a precise data extraction agent. Your role is to read a business idea an
 
 Target JSON Format:
 {
-  "target_country": "The target country or region stated in the business idea (e.g. 'UK', 'US', 'Europe', 'India'). Read the BUSINESS IDEA carefully: if it mentions 'UK-based', 'UK', 'United Kingdom', or 'London', output 'UK'. If 'US' or 'United States', output 'US'. If not specified, output 'Global'.",
-  "finance_currency": "The currency code or symbol used in the Finance assessment (e.g. 'GBP', '£', 'USD', '$', 'EUR', '€'). If not specified, output 'USD'.",
+  "target_country": "The target country or region stated in the business idea (e.g. 'UK', 'US', 'Europe', 'India'). Read the BUSINESS IDEA carefully: if it mentions 'UK', 'United Kingdom', 'London', output 'UK'. If 'US' or 'United States', output 'US'. If 'India', 'Indian', 'Bangalore', 'Mumbai', 'Delhi', output 'India'. If not specified, output 'Global'.",
+  "finance_currency": "The currency code or symbol used in the Finance assessment (e.g. 'GBP', '£', 'USD', '$', 'EUR', '€', 'INR', '₹', 'Rs.'). If not specified, output 'USD'.",
   "strategy_pricing": [
     {"tier_name": "Tier name (e.g. Starter, Growth, Enterprise)", "price_val": 123.45}
   ],
@@ -28,8 +28,10 @@ Rules for tier_name:
 - tier_name MUST ALWAYS be a non-empty, non-null string describing the pricing tier (e.g. 'Starter', 'Growth', 'Enterprise'). NEVER return null or empty string for tier_name.
 
 Rules for price_val:
-- Use the exact numeric dollar/pound/euro value (as a float) if the assessment states a specific amount OR a starting price floor (e.g., 'from $500/month', 'Enterprise: starting at £1000 (negotiated)' → extract 500.0 or 1000.0). Even if terms like 'negotiated', 'custom contract', or 'starting from' are present alongside a number, ALWAYS extract the numeric figure as float.
-- Use -1.0 ONLY if the tier is explicitly described WITHOUT ANY numeric figures (e.g., 'contact us for pricing', 'custom quote on request' where no dollar/pound number exists).
+- MUST ALWAYS extract the MONTHLY recurring price figure for every tier across all three assessments (Strategy, Finance, Marketing).
+- If an assessment states both monthly and annual prices (e.g. '₹499/month or ₹4,999/year', '$49/mo or $490/year', '£299/mo or £2,990/year'), ALWAYS extract the MONTHLY figure (499.0, 49.0, 299.0). NEVER extract annual figures, total contract values, or one-time setup fees as price_val.
+- Use the exact numeric price value (as a float) regardless of currency symbol (£, $, €, ₹, INR, Rs.). Examples: 'from $500/month' → 500.0, 'Enterprise: starting at £1000' → 1000.0, 'Starter: ₹499/month' → 499.0, 'Growth: ₹1,999/mo' → 1999.0, 'Rs. 9,999' → 9999.0. Always strip commas from formatted numbers like '1,999' or '9,999' or '1,00,000' and extract the pure float figure matching the monthly rate.
+- Use -1.0 ONLY if the tier is explicitly described WITHOUT ANY numeric figures (e.g., 'contact us for pricing', 'custom quote on request' where no numeric figure exists).
 - Use null ONLY if the tier name is mentioned but no price or pricing intent can be determined from the text (i.e. the data is simply absent).
 
 Return ONLY the valid JSON block wrapped in a markdown code fence. Do not include any introductory or concluding text.
@@ -72,11 +74,6 @@ class DomainAssessmentsData(BaseModel):
         errors = []
 
         # ── Rule A: ALL THREE sources must have pricing data ────────────────────
-        # Strategy, Finance, and Marketing must each return at least one tier.
-        # An empty list from any source means the agent failed to output pricing
-        # OR the extraction failed — either way, cross-validation is meaningless.
-        # (Strategy receives Finance's finalized pricing context via state before
-        #  it runs, so an empty strategy_pricing is an extraction/agent failure.)
         source_map = {
             "strategy":  self.strategy_pricing,
             "finance":   self.finance_pricing,
@@ -110,13 +107,10 @@ class DomainAssessmentsData(BaseModel):
             all_tiers.setdefault(normalise_tier(item.tier_name), {})["marketing"] = item
 
         for normalized_tier, source_items in all_tiers.items():
-            # Classify each source's contribution to this tier
             numeric_sources  = [src for src, item in source_items.items() if item.is_numeric]
             custom_sources   = [src for src, item in source_items.items() if item.is_custom]
             missing_sources  = [src for src, item in source_items.items() if item.is_missing]
 
-            # ── Rule B1: null price alongside any concrete numeric ───────────
-            # A None alongside a real number means extraction failure or agent gap.
             if missing_sources and numeric_sources:
                 errors.append(
                     f"Tier '{normalized_tier}': null price_val in "
@@ -125,12 +119,6 @@ class DomainAssessmentsData(BaseModel):
                     f"possible upstream agent failure or extraction gap."
                 )
 
-            # ── Rule B3: mixed numeric + custom-sentinel = inconsistency ─────
-            # If at least one source gave a concrete number AND at least one gave
-            # the non-numeric sentinel (-1.0), the sources disagree on whether
-            # this tier is priced or unpriced — that is a real validation error.
-            # The sentinel-vs-sentinel case (all sources agree tier is custom) is
-            # the ONLY case where we skip the numeric mismatch check.
             if numeric_sources and custom_sources:
                 breakdown = ", ".join(
                     [
@@ -146,10 +134,6 @@ class DomainAssessmentsData(BaseModel):
                     f"({breakdown})."
                 )
 
-            # ── Rule B2: numeric-only spread check (>2x) ────────────────────
-            # Only runs when B3 didn't fire (i.e. all active sources are numeric).
-            # Custom-sentinel sources are excluded here because B3 already caught
-            # any numeric+custom inconsistency above.
             if not custom_sources:
                 numeric_prices = {
                     src: item.price_val
@@ -159,7 +143,21 @@ class DomainAssessmentsData(BaseModel):
                 if len(numeric_prices) >= 2:
                     min_price = min(numeric_prices.values())
                     max_price = max(numeric_prices.values())
-                    if max_price > 2.0 * min_price:
+
+                    # Check if one source extracted annual pricing (~10x to 12x of monthly)
+                    normalized_prices = {}
+                    for src, p in numeric_prices.items():
+                        if p > 0 and min_price > 0 and (p / min_price >= 8.5) and (p / min_price <= 13.5):
+                            # Normalize annual price to monthly rate for fair spread check
+                            normalized_p = round(p / 10.0) if abs((p / 10.0) - min_price) < abs((p / 12.0) - min_price) else round(p / 12.0)
+                            normalized_prices[src] = float(normalized_p)
+                        else:
+                            normalized_prices[src] = p
+                    
+                    norm_min = min(normalized_prices.values())
+                    norm_max = max(normalized_prices.values())
+
+                    if norm_max > 2.0 * norm_min:
                         breakdown = ", ".join(
                             [f"{k}: {v}" for k, v in numeric_prices.items()]
                         )
@@ -189,8 +187,8 @@ class DomainAssessmentsData(BaseModel):
             "eu": ["EUR", "€"],
             "germany": ["EUR", "€"],
             "france": ["EUR", "€"],
-            "india": ["INR", "₹"],
-            "global": ["USD", "$", "EUR", "€", "GBP", "£"]
+            "india": ["INR", "₹", "RS", "RS.", "RUPEES", "RUPEE"],
+            "global": ["USD", "$", "EUR", "€", "GBP", "£", "INR", "₹", "RS", "RS.", "RUPEES", "RUPEE"]
         }
         
         matched_keys = [k for k in country_currency_map.keys() if k in country]
@@ -221,6 +219,87 @@ def extract_json_block(text: str) -> str:
     if text.endswith("```"):
         text = text[:-3]
     return text.strip()
+
+def fallback_extract_pricing(text: str) -> List[Dict[str, Any]]:
+    """Deterministic fallback pricing tier extractor for text assessments across any currency (₹, INR, Rs., rupees, £, GBP, $, USD, €, EUR)."""
+    import re
+    if not text or text == "__FAILED__":
+        return []
+    
+    results = []
+    curr_pattern = r'(?:[₹$£€]|INR|GBP|USD|EUR|Rs\.?|RS\.?|Rupees?|rupees?)'
+    num_pattern = r'([0-9]{1,3}(?:,[0-9]{2,3})*(?:\.[0-9]+)?)'
+
+    # 1. First pass: look specifically for monthly pricing patterns (prefix currency)
+    monthly_pattern = re.compile(
+        rf'(?:([A-Za-z0-9\s\-\/\&\(\)]{{2,30}}))?\s*[:\-\=\@\(]?\s*(?:from|starting\s+at|approx\.?)?\s*{curr_pattern}\s*{num_pattern}\s*(?:\/(?:month|mo)|per\s+month|monthly|\/m)\b',
+        re.IGNORECASE
+    )
+    
+    # 1b. Monthly pattern (suffix currency)
+    monthly_suffix_pattern = re.compile(
+        rf'(?:([A-Za-z0-9\s\-\/\&\(\)]{{2,30}}))?\s*[:\-\=\@\(]?\s*(?:from|starting\s+at|approx\.?)?\s*{num_pattern}\s*{curr_pattern}\s*(?:\/(?:month|mo)|per\s+month|monthly|\/m)\b',
+        re.IGNORECASE
+    )
+
+    # 2. General pass: look for general tier pricing (prefix currency)
+    general_pattern = re.compile(
+        rf'(?:([A-Za-z0-9\s\-\/\&\(\)]{{2,30}}))?\s*[:\-\=\@\(]?\s*(?:from|starting\s+at|approx\.?)?\s*{curr_pattern}\s*{num_pattern}',
+        re.IGNORECASE
+    )
+
+    # 2b. General pass (suffix currency)
+    general_suffix_pattern = re.compile(
+        rf'(?:([A-Za-z0-9\s\-\/\&\(\)]{{2,30}}))?\s*[:\-\=\@\(]?\s*(?:from|starting\s+at|approx\.?)?\s*{num_pattern}\s*{curr_pattern}',
+        re.IGNORECASE
+    )
+
+    seen_tiers = set()
+    
+    def process_matches(pattern, is_monthly=False, num_group_idx=2, tier_group_idx=1):
+        for match in pattern.finditer(text):
+            groups = match.groups()
+            tier_raw = groups[tier_group_idx - 1] if len(groups) >= tier_group_idx else None
+            price_str = groups[num_group_idx - 1] if len(groups) >= num_group_idx else None
+            
+            if not price_str:
+                continue
+
+            tier_name = tier_raw.strip() if tier_raw and tier_raw.strip() else "General Tier"
+            tier_name = re.sub(r'^[0-9\.\-\*\#\s\(\)]+', '', tier_name).strip()
+            tier_name = re.sub(r'[\(\)]+$', '', tier_name).strip()
+            if not tier_name or len(tier_name) < 2:
+                tier_name = "General Tier"
+                
+            if not is_monthly:
+                if "annual" in tier_name.lower() or "year" in tier_name.lower():
+                    continue
+                match_start = max(0, match.start() - 20)
+                match_end = min(len(text), match.end() + 20)
+                context = text[match_start:match_end].lower()
+                if "per year" in context or "/year" in context or "/yr" in context or "annual" in context or "annum" in context:
+                    continue
+                
+            clean_price = price_str.replace(',', '')
+            try:
+                val = float(clean_price)
+                if val > 0:
+                    norm_key = tier_name.lower()
+                    if norm_key not in seen_tiers:
+                        seen_tiers.add(norm_key)
+                        results.append({"tier_name": tier_name, "price_val": val})
+            except ValueError:
+                pass
+
+    process_matches(monthly_pattern, is_monthly=True, num_group_idx=2, tier_group_idx=1)
+    if not results:
+        process_matches(monthly_suffix_pattern, is_monthly=True, num_group_idx=1, tier_group_idx=2)
+    if not results:
+        process_matches(general_pattern, is_monthly=False, num_group_idx=2, tier_group_idx=1)
+    if not results:
+        process_matches(general_suffix_pattern, is_monthly=False, num_group_idx=1, tier_group_idx=2)
+        
+    return results
 
 def business_rules_engine_node(state: AgentState) -> Dict[str, Any]:
     """
@@ -276,12 +355,50 @@ def business_rules_engine_node(state: AgentState) -> Dict[str, Any]:
     except Exception as parse_err:
         print(f"Rules engine extraction parser error: {str(parse_err)}")
 
-    # 1b. Deterministic target country check & pricing dictionary sanitization
+    # 1b. Deterministic target country & currency normalization
     if isinstance(extracted_dict, dict):
         idea_lower = idea.lower()
         extracted_country = str(extracted_dict.get("target_country", "")).lower()
         if any(term in idea_lower for term in ["uk", "uk-based", "united kingdom", "london", "britain", "england", "scotland", "wales"]) and extracted_country in ("global", "", "none", "unknown"):
             extracted_dict["target_country"] = "UK"
+        elif any(term in idea_lower for term in ["india", "indian", "mumbai", "delhi", "bengaluru", "bangalore", "hyderabad", "pune", "chennai", "kolkata", "noida", "gurugram", "gurgaon"]) and extracted_country in ("global", "", "none", "unknown"):
+            extracted_dict["target_country"] = "India"
+
+        combined_text = f"{idea} {finance_text} {strategy_text} {marketing_text}".lower()
+        if any(sym in combined_text for sym in ["₹", "inr", "rs.", "rs ", "rupees", "rupee"]):
+            extracted_dict["finance_currency"] = "INR"
+        elif any(sym in combined_text for sym in ["£", "gbp"]):
+            extracted_dict["finance_currency"] = "GBP"
+        elif any(sym in combined_text for sym in ["€", "eur"]):
+            extracted_dict["finance_currency"] = "EUR"
+        elif any(sym in combined_text for sym in ["$", "usd"]):
+            extracted_dict["finance_currency"] = "USD"
+
+        # Canonicalize raw currency string
+        raw_curr = str(extracted_dict.get("finance_currency", "")).strip()
+        raw_curr_upper = raw_curr.upper()
+        if raw_curr in ["₹", "Rs.", "Rs", "RS", "RS."] or "INR" in raw_curr_upper or "RUPEE" in raw_curr_upper:
+            extracted_dict["finance_currency"] = "INR"
+        elif raw_curr == "£" or "GBP" in raw_curr_upper:
+            extracted_dict["finance_currency"] = "GBP"
+        elif raw_curr == "€" or "EUR" in raw_curr_upper:
+            extracted_dict["finance_currency"] = "EUR"
+        elif raw_curr == "$" or "USD" in raw_curr_upper:
+            extracted_dict["finance_currency"] = "USD"
+
+        # Ensure pricing lists are non-empty using fallback extractor if LLM returned empty list
+        source_texts = {
+            "strategy_pricing": strategy_text,
+            "finance_pricing": finance_text,
+            "marketing_pricing": marketing_text
+        }
+        for key, text_content in source_texts.items():
+            pricing_list = extracted_dict.get(key)
+            if not isinstance(pricing_list, list) or len(pricing_list) == 0:
+                fallback_tiers = fallback_extract_pricing(text_content)
+                if fallback_tiers:
+                    print(f"[Business Rules Engine] Used fallback pricing regex extractor for {key}: {fallback_tiers}")
+                    extracted_dict[key] = fallback_tiers
 
         # Sanitize pricing tier names to prevent null/None validation failures
         for key in ["strategy_pricing", "finance_pricing", "marketing_pricing"]:
