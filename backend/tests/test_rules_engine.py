@@ -60,14 +60,26 @@ def run_pydantic_rules_unit_tests():
     except ValidationError as val_err:
         errors = [err.get("msg") for err in val_err.errors()]
         print(f"SUCCESS: Currency mismatch failed validation as expected. Errors: {errors}")
+    # Test Case 4: INR currency for India venture
+    print("\nTest Case 4: Consistent INR pricing (Rs. 499, Rs. 1,999, Rs. 9,999) & INR currency for India country")
+    inr_data = {
+        "target_country": "India",
+        "finance_currency": "INR",
+        "strategy_pricing": [{"tier_name": "Starter", "price_val": 499.0}, {"tier_name": "Growth", "price_val": 1999.0}, {"tier_name": "Enterprise", "price_val": 9999.0}],
+        "finance_pricing": [{"tier_name": "Starter", "price_val": 499.0}, {"tier_name": "Growth", "price_val": 1999.0}, {"tier_name": "Enterprise", "price_val": 9999.0}],
+        "marketing_pricing": [{"tier_name": "Starter", "price_val": 499.0}, {"tier_name": "Growth", "price_val": 1999.0}, {"tier_name": "Enterprise", "price_val": 9999.0}]
+    }
+    try:
+        DomainAssessmentsData.model_validate(inr_data)
+        print("SUCCESS: INR data passed Pydantic rules engine correctly.")
     except Exception as e:
-        print(f"FAILED: Threw unexpected error: {str(e)}")
+        print(f"FAILED: INR data threw exception: {str(e)}")
 
 def run_rules_node_integration_test():
     print("\n=== Running Rules Engine Node Integration Test ===")
     
-    # Setup a mock state with custom assessments to force extraction
-    mock_state = {
+    # Test Case A: UK GBP
+    mock_state_uk = {
         "project_id": "00000000-0000-0000-0000-000000000000",
         "business_idea_input": "Launch automated waste recycling logistics in London, UK.",
         "specialized_outputs": {
@@ -77,20 +89,32 @@ def run_rules_node_integration_test():
         }
     }
     
-    print("Executing business_rules_engine_node with mock input...")
-    node_result = business_rules_engine_node(mock_state)
-    val_res = node_result.get("rules_validation_result", {})
-    
-    print("\nRules Node Execution Result:")
-    print(f"Is Valid: {val_res.get('is_valid')}")
-    print(f"Errors Found: {val_res.get('errors')}")
-    print(f"Extracted Metrics: {val_res.get('extracted_data')}")
-    
-    if val_res.get("is_valid") is not True:
-        print("Warning: validation failed, check details above (e.g. extraction precision or threshold triggers).")
-    else:
-        print("SUCCESS: Integration extraction and validation executed correctly.")
+    print("Executing business_rules_engine_node with UK mock input...")
+    node_result_uk = business_rules_engine_node(mock_state_uk)
+    val_res_uk = node_result_uk.get("rules_validation_result", {})
+    print(f"UK Integration Is Valid: {val_res_uk.get('is_valid')}")
+    assert val_res_uk.get("is_valid") is True, f"UK validation failed: {val_res_uk.get('errors')}"
+
+    # Test Case B: India INR
+    mock_state_inr = {
+        "project_id": "00000000-0000-0000-0000-000000000001",
+        "business_idea_input": "B2B SaaS logistics platform in Bangalore, India.",
+        "specialized_outputs": {
+            "strategy": "Starter: ₹499/month, Growth: ₹1,999/month, Enterprise: starting at ₹9,999/month.",
+            "finance": "Starter: ₹499/month, Growth: ₹1,999/month, Enterprise: from ₹9,999/month.",
+            "marketing": "Starter: ₹499/month, Growth: ₹1,999/month, Enterprise: from ₹9,999/month."
+        }
+    }
+
+    print("\nExecuting business_rules_engine_node with India INR mock input...")
+    node_result_inr = business_rules_engine_node(mock_state_inr)
+    val_res_inr = node_result_inr.get("rules_validation_result", {})
+    print(f"India INR Integration Is Valid: {val_res_inr.get('is_valid')}")
+    print(f"India INR Extracted Metrics: {val_res_inr.get('extracted_data')}")
+    assert val_res_inr.get("is_valid") is True, f"India INR validation failed: {val_res_inr.get('errors')}"
+    print("SUCCESS: Both UK GBP and India INR integration extractions and validations executed correctly.")
 
 if __name__ == "__main__":
     run_pydantic_rules_unit_tests()
     run_rules_node_integration_test()
+

@@ -38,5 +38,6 @@ class AgentState(TypedDict):
     scores: Dict[str, Any]
     final_report: str
     generated_reports: NotRequired[Dict[str, Any]]
+    sources: NotRequired[List[Dict[str, str]]]
     force_refresh: NotRequired[bool]
 

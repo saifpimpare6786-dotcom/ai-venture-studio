@@ -11,15 +11,36 @@ from services.rag_retriever import ingest_chunks, get_chroma_client, retrieve_co
 from app.pipeline.state import AgentState
 
 QUERY_EXTRACTOR_SYSTEM_PROMPT = """
-You are an expert search query generator. 
-Analyze the provided business analysis plan and extract the 2-3 most specific, high-relevance web search queries suggested in the 'Web Research Recommendations' section. 
+You are an expert search query generator for startup venture market research. 
+Analyze the provided business analysis plan and extract 2 specific, high-relevance web search queries suggested in the 'Web Research Recommendations' section. 
+
+AUTHORITATIVE SOURCE SELECTION MANDATE:
+Formulate each query to bias search results toward authoritative, highly reputable sources:
+- Official government statistics, regulator websites, and statutory guidelines
+- Established industry associations and major publications
+- Public research insight reports from top consulting and analyst firms (e.g. McKinsey, Deloitte, Gartner, Statista)
 
 Return them ONLY as a plain list, one query per line, without numbers, bullets, or quotes.
+"""
+
+COMPLIANCE_QUERY_EXTRACTOR_SYSTEM_PROMPT = """
+You are an expert legal and regulatory compliance research analyst.
+Analyze the provided business plan and business idea input, specifically identifying:
+1. Target industry / sector
+2. Target country / jurisdiction / region
+
+Formulate ONE highly-focused, jurisdiction-specific search query to discover exact applicable statutory laws, acts, licensing requirements, data protection rules, tax obligations, and official regulatory bodies for this venture.
+
+Example output for UK carbon SaaS: "UK SECR Environment Act carbon accounting regulations compliance licensing Environment Agency"
+Example output for India fintech: "India digital lending licensing regulations RBI Data Protection Act compliance"
+
+Return ONLY the search query string on a single line without quotes, bullets, or extra text.
 """
 
 def execute_tavily_search(query: str) -> Dict[str, Any]:
     """
     Executes a Tavily search query with exponential backoff on HTTP 429 rate limits.
+    Biases towards authoritative results using advanced search depth.
     """
     api_key = settings.TAVILY_API_KEY
     if not api_key:
@@ -29,7 +50,7 @@ def execute_tavily_search(query: str) -> Dict[str, Any]:
     payload = {
         "api_key": api_key,
         "query": query,
-        "search_depth": "basic",
+        "search_depth": "advanced",
         "include_answer": True
     }
     
@@ -103,6 +124,22 @@ def research_agent_node(state: AgentState) -> Dict[str, Any]:
                 deduped.append(doc)
         research_summary = "\n\n---\n\n".join(deduped[:10])  # limit summary size if there are many chunks
         
+        cached_sources = []
+        try:
+            supabase = get_supabase_client()
+            prev_log = supabase.table("agent_logs") \
+                .select("output_data") \
+                .eq("project_id", project_id) \
+                .eq("agent_name", "Research Agent") \
+                .order("timestamp", desc=True) \
+                .limit(1) \
+                .execute()
+            if prev_log.data and len(prev_log.data) > 0:
+                out_data = prev_log.data[0].get("output_data") or {}
+                cached_sources = out_data.get("sources", [])
+        except Exception as log_fetch_err:
+            print(f"Warning reading cached sources: {log_fetch_err}")
+
         # Log cached execution to agent_logs
         try:
             supabase = get_supabase_client()
@@ -117,7 +154,8 @@ def research_agent_node(state: AgentState) -> Dict[str, Any]:
                 },
                 "output_data": {
                     "research_results": research_summary,
-                    "research_summary": research_summary
+                    "research_summary": research_summary,
+                    "sources": cached_sources
                 }
             }).execute()
             print("Logged cached Research Agent execution to Supabase.")
@@ -126,7 +164,8 @@ def research_agent_node(state: AgentState) -> Dict[str, Any]:
             
         print(f"--- [Research Agent Node] Finished execution (Cached) ---")
         return {
-            "research_results": research_summary
+            "research_results": research_summary,
+            "sources": cached_sources
         }
         
     # If force_refresh is True and we have existing cache, delete old chunks to prevent duplication
@@ -138,7 +177,7 @@ def research_agent_node(state: AgentState) -> Dict[str, Any]:
         except Exception as delete_err:
             print(f"Warning deleting old chunks: {str(delete_err)}")
             
-    # 1. Extract search queries using the LLM
+    # 1. Extract search queries using the LLM (General market + Dedicated legal/compliance query)
     print("Extracting queries from plan...")
     queries_raw = call_llm(
         prompt=plan,
@@ -152,20 +191,35 @@ def research_agent_node(state: AgentState) -> Dict[str, Any]:
     if isinstance(queries_raw, dict) and queries_raw.get("status") == "failed":
         print(f"Research Agent node failed to extract queries: {queries_raw['error']}")
         return {
-            "research_results": f"Execution failed: {queries_raw['error']}"
+            "research_results": f"Execution failed: {queries_raw['error']}",
+            "sources": []
         }
         
     queries = [q.strip() for q in queries_raw.split("\n") if q.strip()]
-    
-    # Cap queries at 3 to conserve quota
-    queries = queries[:3]
-    print(f"Extracted queries for search: {queries}")
+    queries = queries[:2]  # Cap general market queries at 2
+
+    # Extract 1 dedicated legal & compliance deep research query for target jurisdiction/industry
+    compliance_query_raw = call_llm(
+        prompt=f"Business Plan & Context:\n{plan[:3000]}",
+        system_prompt=COMPLIANCE_QUERY_EXTRACTOR_SYSTEM_PROMPT,
+        preferred_provider="nvidia",
+        project_id=project_id,
+        agent_name="Research Agent (Compliance Search)"
+    )
+    if isinstance(compliance_query_raw, str) and compliance_query_raw.strip():
+        comp_q = compliance_query_raw.strip().split("\n")[0].strip()
+        if comp_q and comp_q not in queries:
+            queries.append(comp_q)
+
+    print(f"Extracted queries for search (including legal/compliance): {queries}")
     
     all_raw_results = {}
     aggregated_summaries = []
     execution_paths = []
     tavily_failures = 0
     degraded_queries = []
+    sources = []
+    seen_urls = set()
     
     # 2. Execute Tavily search queries with local RAG fallback on quota/API failure
     for idx, query in enumerate(queries):
@@ -193,6 +247,14 @@ def research_agent_node(state: AgentState) -> Dict[str, Any]:
                 url = r.get("url", "No URL")
                 content = r.get("content", "")
                 text_elements.append(f"Result [{r_idx + 1}] {title} ({url})\nContent: {content}")
+                
+                # Capture source details for genuine citations display
+                if url and url != "No URL" and url not in seen_urls:
+                    seen_urls.add(url)
+                    sources.append({
+                        "title": title if title and title != "No Title" else url,
+                        "url": url
+                    })
                 
             raw_text = "\n\n".join(text_elements)
             if raw_text.strip():
@@ -269,7 +331,8 @@ def research_agent_node(state: AgentState) -> Dict[str, Any]:
                 "tavily_failures": tavily_failures,
                 "degraded_queries": degraded_queries,
                 "fallback_used": tavily_failures > 0,
-                "raw_results_keys": list(all_raw_results.keys())
+                "raw_results_keys": list(all_raw_results.keys()),
+                "sources": sources
             }
         }).execute()
         print(f"Logged Research Agent execution ({status_str}) to Supabase.")
@@ -278,6 +341,8 @@ def research_agent_node(state: AgentState) -> Dict[str, Any]:
         
     print(f"--- [Research Agent Node] Finished execution ---")
     return {
-        "research_results": research_summary
+        "research_results": research_summary,
+        "sources": sources
     }
+
 

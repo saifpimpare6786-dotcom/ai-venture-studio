@@ -128,10 +128,28 @@ def get_project_status(project_id: str, current_user = Depends(get_current_user)
             
         project_status = project.data[0].get("status") or "idle"
         reports_res = supabase.table("reports").select("*").eq("project_id", project_id).execute()
+        
+        # Retrieve actual sources saved by Research Agent from agent_logs
+        sources = []
+        try:
+            log_res = supabase.table("agent_logs") \
+                .select("output_data") \
+                .eq("project_id", project_id) \
+                .eq("agent_name", "Research Agent") \
+                .order("timestamp", desc=True) \
+                .limit(1) \
+                .execute()
+            if log_res.data and len(log_res.data) > 0:
+                out_data = log_res.data[0].get("output_data") or {}
+                sources = out_data.get("sources", [])
+        except Exception as log_err:
+            print(f"Warning fetching research sources for project {project_id}: {log_err}")
+
         return {
             "project_id": project_id,
             "status": project_status,
-            "reports": reports_res.data if reports_res.data else []
+            "reports": reports_res.data if reports_res.data else [],
+            "sources": sources
         }
     except HTTPException:
         raise

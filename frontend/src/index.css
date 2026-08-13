@@ -1,70 +1,111 @@
 @import "tailwindcss";
 
 @theme {
-  --color-background: #080710;
-  --color-card: rgba(17, 12, 28, 0.45);
-  --color-card-hover: rgba(29, 21, 48, 0.6);
-  --color-primary: #a855f7;
-  --color-primary-hover: #c084fc;
-  --color-secondary: #06b6d4;
-  --color-border: rgba(255, 255, 255, 0.08);
-  --color-text-primary: #f3f4f6;
-  --color-text-secondary: #9ca3af;
-  --color-accent: #f43f5e;
+  --color-background: #F8F9FB;
+  --color-card: #FFFFFF;
+  --color-card-hover: #FAFAFC;
+  --color-primary: #5B4CE0;
+  --color-primary-hover: #4C3ECC;
+  --color-primary-light: #F0EEFF;
+  --color-secondary: #0EA5A5;
+  --color-secondary-light: #E6F7F7;
+  --color-border: #E4E7EC;
+  --color-border-dark: #D0D5DD;
+  --color-text-primary: #1A1D23;
+  --color-text-secondary: #4B5565;
+  --color-text-muted: #98A2B3;
+  --color-accent: #5B4CE0;
 }
 
-/* Custom CSS Scrollbar and styling utilities */
+/* Base Light Theme Setup */
 @layer base {
   body {
-    background-color: #06040a;
+    background-color: #F8F9FB;
     background-image: 
-      radial-gradient(at 0% 0%, rgba(124, 58, 237, 0.1) 0px, transparent 50%),
-      radial-gradient(at 100% 100%, rgba(6, 182, 212, 0.1) 0px, transparent 50%);
-    color: #f3f4f6;
-    font-family: 'Outfit', 'Inter', system-ui, sans-serif;
+      radial-gradient(at 0% 0%, rgba(91, 76, 224, 0.03) 0px, transparent 50%),
+      radial-gradient(at 100% 100%, rgba(14, 165, 165, 0.03) 0px, transparent 50%);
+    color: #4B5565;
+    font-family: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    line-height: 1.6;
     min-height: 100vh;
     overflow-x: hidden;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  h1, h2, h3, h4, h5, h6 {
+    color: #1A1D23;
+    font-weight: 700;
+    letter-spacing: -0.02em;
   }
 }
 
-/* Glassmorphism utility */
-.glass {
-  background: rgba(13, 9, 23, 0.4);
-  backdrop-filter: blur(16px);
-  -webkit-backdrop-filter: blur(16px);
-  border: 1px solid rgba(255, 255, 255, 0.07);
+/* Exhibit Card System (Light Consulting Aesthetic) */
+.exhibit-card, .glass-card, .glass {
+  background-color: #FFFFFF;
+  border: 1px solid #E4E7EC;
+  box-shadow: 0 1px 3px 0 rgba(16, 24, 40, 0.06), 0 1px 2px -1px rgba(16, 24, 40, 0.04);
+  transition: all 0.2s ease-in-out;
 }
 
-.glass-card {
-  background: rgba(17, 12, 28, 0.45);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
-  border: 1px solid rgba(255, 255, 255, 0.06);
-  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+.exhibit-card:hover, .glass-card:hover {
+  border-color: #D0D5DD;
+  box-shadow: 0 4px 12px -2px rgba(16, 24, 40, 0.08), 0 2px 6px -1px rgba(16, 24, 40, 0.04);
 }
 
-.glass-card:hover {
-  background: rgba(29, 21, 48, 0.6);
-  border-color: rgba(168, 85, 247, 0.3);
-  box-shadow: 0 0 25px rgba(168, 85, 247, 0.15);
-  transform: translateY(-2px);
+/* Consulting Exhibit Title & Left-Tick Header Utility */
+.exhibit-section-title {
+  border-left: 3px solid #5B4CE0;
+  padding-left: 0.75rem;
+  font-size: 0.75rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: #1A1D23;
 }
 
-/* Custom scrollbars */
+/* Small Caps / Kicker Label Utility */
+.kicker-label {
+  font-size: 0.6875rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: #98A2B3;
+}
+
+/* Form Input Focus Utilities */
+.consulting-input {
+  background-color: #FFFFFF;
+  border: 1px solid #E4E7EC;
+  color: #1A1D23;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.consulting-input:focus {
+  outline: none;
+  border-color: #5B4CE0;
+  box-shadow: 0 0 0 3px rgba(91, 76, 224, 0.12);
+}
+
+.consulting-input::placeholder {
+  color: #98A2B3;
+}
+
+/* Custom Scrollbars for Light Theme */
 ::-webkit-scrollbar {
   width: 6px;
   height: 6px;
 }
 
 ::-webkit-scrollbar-track {
-  background: rgba(8, 7, 16, 0.5);
+  background: #F1F5F9;
 }
 
 ::-webkit-scrollbar-thumb {
-  background: rgba(168, 85, 247, 0.3);
+  background: #CBD5E1;
   border-radius: 4px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: rgba(168, 85, 247, 0.6);
+  background: #94A3B8;
 }
+

@@ -720,6 +720,9 @@ Pull insight from Strategy, Risk, Rules Engine, and Critic assessments.
 
 CRITICAL: Return a JSON object with exactly these six top-level keys: political, economic, social, technological, legal, environmental -- do not wrap the response in any outer object or key (such as "PESTLE Analysis" or "pestle"). Each of the six keys MUST contain a list of strings.
 
+ANTI-FABRICATION MANDATE (CRITICAL): Cite ONLY statutory acts, regulations, standards, or regulatory bodies explicitly confirmed in the Risk assessment or Research inputs for the venture's target jurisdiction. Do NOT invent unconfirmed acts or firm reports. If a regulation cannot be confirmed from context, describe in general terms and note "verify with a qualified professional".
+DISCLAIMER MANDATE: Include the exact phrase "This is an automated compliance scan, not legal advice — verify with a qualified professional." as a standing note in the "legal" section array.
+
 Target JSON Format -- return ONLY this block wrapped in ```json ... ```:
 {{
   "political": [
@@ -930,6 +933,9 @@ Pull insight from Risk Agent, Critic Agent, Business Rules Engine, and Council d
 
 CRITICAL: Return a JSON object with exactly these four top-level keys: regulatory_compliance_risks, operational_technical_risks, market_financial_risks, critic_adversarial_vulnerabilities -- do not wrap the response in any outer object or key.
 
+ANTI-FABRICATION MANDATE (CRITICAL): Cite ONLY verified statutory acts, regulations, standards, or regulatory bodies. Do NOT invent or assert unconfirmed statutes, acts, or reports. If unconfirmed, describe in general terms and flag as "verify with a qualified professional".
+DISCLAIMER MANDATE: Include the exact standing note "This is an automated compliance scan, not legal advice — verify with a qualified professional." in the regulatory_compliance_risks array.
+
 Target JSON Format -- return ONLY this block wrapped in ```json ... ```:
 {{
   "regulatory_compliance_risks": [
@@ -983,6 +989,9 @@ Generate a structured ESG & Sustainability Recommendations JSON detailing enviro
 Pull insight from Risk Agent, Strategy Agent, Business Rules Engine, and Council notes.
 
 CRITICAL: Return a JSON object with exactly these four top-level keys: environmental_impact_metrics, social_governance_frameworks, regulatory_esg_compliance, sustainability_roadmap -- do not wrap the response in any outer object or key.
+
+ANTI-FABRICATION MANDATE (CRITICAL): Cite ONLY verified statutory acts, regulations, or ESG standards confirmed in the assessment inputs for the target jurisdiction.
+DISCLAIMER MANDATE: Include the exact standing note "This is an automated compliance scan, not legal advice — verify with a qualified professional." in the regulatory_esg_compliance array.
 
 Target JSON Format -- return ONLY this block wrapped in ```json ... ```:
 {{
