@@ -293,11 +293,11 @@ def fallback_extract_pricing(text: str) -> List[Dict[str, Any]]:
 
     process_matches(monthly_pattern, is_monthly=True, num_group_idx=2, tier_group_idx=1)
     if not results:
-        process_matches(monthly_suffix_pattern, is_monthly=True, num_group_idx=1, tier_group_idx=2)
+        process_matches(monthly_suffix_pattern, is_monthly=True, num_group_idx=2, tier_group_idx=1)
     if not results:
         process_matches(general_pattern, is_monthly=False, num_group_idx=2, tier_group_idx=1)
     if not results:
-        process_matches(general_suffix_pattern, is_monthly=False, num_group_idx=1, tier_group_idx=2)
+        process_matches(general_suffix_pattern, is_monthly=False, num_group_idx=2, tier_group_idx=1)
         
     return results
 
