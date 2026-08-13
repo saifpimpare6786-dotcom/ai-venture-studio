@@ -232,13 +232,13 @@ def fallback_extract_pricing(text: str) -> List[Dict[str, Any]]:
 
     # 1. First pass: look specifically for monthly pricing patterns (prefix currency)
     monthly_pattern = re.compile(
-        rf'(?:([A-Za-z0-9\s\-\/\&\(\)]{{2,30}}))?\s*[:\-\=\@\(]?\s*(?:from|starting\s+at|approx\.?)?\s*{curr_pattern}\s*{num_pattern}\s*(?:\/(?:month|mo)|per\s+month|monthly|\/m)\b',
+        rf'(?:([A-Za-z0-9\s\-\/\&\(\)]{{2,30}}))?\s*[:\-\=\@\(]?\s*(?:from|starting\s+at|approx\.?)?\s*{curr_pattern}\s*{num_pattern}\s*(?:(?:\/\s*|per\s+)(?:month|mo|m|monthly))\b',
         re.IGNORECASE
     )
     
     # 1b. Monthly pattern (suffix currency)
     monthly_suffix_pattern = re.compile(
-        rf'(?:([A-Za-z0-9\s\-\/\&\(\)]{{2,30}}))?\s*[:\-\=\@\(]?\s*(?:from|starting\s+at|approx\.?)?\s*{num_pattern}\s*{curr_pattern}\s*(?:\/(?:month|mo)|per\s+month|monthly|\/m)\b',
+        rf'(?:([A-Za-z0-9\s\-\/\&\(\)]{{2,30}}))?\s*[:\-\=\@\(]?\s*(?:from|starting\s+at|approx\.?)?\s*{num_pattern}\s*{curr_pattern}\s*(?:(?:\/\s*|per\s+)(?:month|mo|m|monthly))\b',
         re.IGNORECASE
     )
 
