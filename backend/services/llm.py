@@ -1,7 +1,91 @@
 import time
 import httpx
-from typing import Dict, Any, Union
+import re
+from typing import Dict, Any, Union, List, Tuple
 from app.core.config import settings
+
+# Per-run Provider Key Rotation State
+_nvidia_key_index: int = 0
+_gemini_key_index: int = 0
+_nvidia_exhausted_indices: set = set()
+_gemini_exhausted_indices: set = set()
+
+def reset_llm_key_rotation() -> None:
+    """Resets key indices and exhausted key sets for NVIDIA NIM and Gemini."""
+    global _nvidia_key_index, _gemini_key_index
+    global _nvidia_exhausted_indices, _gemini_exhausted_indices
+    _nvidia_key_index = 0
+    _gemini_key_index = 0
+    _nvidia_exhausted_indices = set()
+    _gemini_exhausted_indices = set()
+
+def _get_active_nvidia_key() -> Tuple[int, str]:
+    """Returns (key_index, api_key) for the current active NVIDIA key, or raises RuntimeError if all exhausted."""
+    keys = settings.get_nvidia_keys()
+    if not keys:
+        raise RuntimeError("No NVIDIA NIM API keys configured.")
+    global _nvidia_key_index, _nvidia_exhausted_indices
+    num_keys = len(keys)
+    for i in range(num_keys):
+        idx = (_nvidia_key_index + i) % num_keys
+        if idx not in _nvidia_exhausted_indices:
+            _nvidia_key_index = idx
+            return (idx, keys[idx])
+    raise RuntimeError(f"All {num_keys} NVIDIA API key(s) exhausted for this run.")
+
+def _mark_nvidia_key_exhausted(idx: int, reason: str) -> None:
+    """Marks NVIDIA key as exhausted and advances key index."""
+    global _nvidia_key_index, _nvidia_exhausted_indices
+    _nvidia_exhausted_indices.add(idx)
+    keys = settings.get_nvidia_keys()
+    num_keys = len(keys)
+    
+    next_idx = None
+    for i in range(num_keys):
+        cand = (idx + 1 + i) % num_keys
+        if cand not in _nvidia_exhausted_indices:
+            next_idx = cand
+            break
+            
+    if next_idx is not None:
+        _nvidia_key_index = next_idx
+        print(f"[Key Rotation] NVIDIA key {idx + 1} {reason} — rotating to key {next_idx + 1}")
+    else:
+        print(f"[Key Rotation] NVIDIA key {idx + 1} {reason} — ALL {num_keys} NVIDIA key(s) exhausted for this run.")
+
+def _get_active_gemini_key() -> Tuple[int, str]:
+    """Returns (key_index, api_key) for the current active Gemini key, or raises RuntimeError if all exhausted."""
+    keys = settings.get_gemini_keys()
+    if not keys:
+        raise RuntimeError("No Gemini API keys configured.")
+    global _gemini_key_index, _gemini_exhausted_indices
+    num_keys = len(keys)
+    for i in range(num_keys):
+        idx = (_gemini_key_index + i) % num_keys
+        if idx not in _gemini_exhausted_indices:
+            _gemini_key_index = idx
+            return (idx, keys[idx])
+    raise RuntimeError(f"All {num_keys} Gemini API key(s) exhausted for this run.")
+
+def _mark_gemini_key_exhausted(idx: int, reason: str) -> None:
+    """Marks Gemini key as exhausted and advances key index."""
+    global _gemini_key_index, _gemini_exhausted_indices
+    _gemini_exhausted_indices.add(idx)
+    keys = settings.get_gemini_keys()
+    num_keys = len(keys)
+    
+    next_idx = None
+    for i in range(num_keys):
+        cand = (idx + 1 + i) % num_keys
+        if cand not in _gemini_exhausted_indices:
+            next_idx = cand
+            break
+            
+    if next_idx is not None:
+        _gemini_key_index = next_idx
+        print(f"[Key Rotation] Gemini key {idx + 1} {reason} — rotating to key {next_idx + 1}")
+    else:
+        print(f"[Key Rotation] Gemini key {idx + 1} {reason} — ALL {num_keys} Gemini key(s) exhausted for this run.")
 
 def call_gemini(
     prompt: str,
@@ -11,7 +95,7 @@ def call_gemini(
     json_mode: bool = False,
 ) -> str:
     """
-    Calls the Gemini API (gemini-3.5-flash) with built-in 429 rate limit backoff.
+    Calls the Gemini API (gemini-3.5-flash) with built-in key rotation and 429 rate limit backoff.
 
     Args:
         max_tokens: Maximum output tokens for the completion. Passed as
@@ -20,10 +104,7 @@ def call_gemini(
         response_schema: Optional JSON schema dict to enforce output shape at API level.
         json_mode: If True, sets responseMimeType to application/json.
     """
-    # Pace requests to avoid API quota saturation (especially when called concurrently or sequentially)
     time.sleep(1.5)
-    
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent?key={settings.GEMINI_API_KEY}"
     
     contents_part = []
     if system_prompt:
@@ -43,44 +124,50 @@ def call_gemini(
         "contents": [{"parts": contents_part}],
         "generationConfig": gen_config,
     }
-    
-    max_retries = 5
-    backoff = 2.0
-    for attempt in range(max_retries):
-        try:
-            response = httpx.post(url, json=payload, headers={"Content-Type": "application/json"}, timeout=60.0)
-            if response.status_code == 200:
-                res_data = response.json()
-                return res_data["candidates"][0]["content"]["parts"][0]["text"]
-            elif response.status_code == 404:
-                print(f"Gemini API 404 (Model Not Found) error. Bypassing retries to failover immediately.")
-                raise ValueError(f"Gemini API returned 404: {response.text}")
-            elif response.status_code == 429:
-                print(f"Gemini API 429 rate limit hit. Attempt {attempt + 1}. Retrying in {backoff + 2.0}s...")
-                time.sleep(backoff + 2.0) # Add delay to avoid back-to-back hits
+
+    while True:
+        key_idx, api_key = _get_active_gemini_key()
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent?key={api_key}"
+        
+        max_retries = 5
+        backoff = 2.0
+        key_rotated = False
+
+        for attempt in range(max_retries):
+            try:
+                response = httpx.post(url, json=payload, headers={"Content-Type": "application/json"}, timeout=60.0)
+                if response.status_code == 200:
+                    res_data = response.json()
+                    return res_data["candidates"][0]["content"]["parts"][0]["text"]
+                elif response.status_code in (400, 401, 403, 429):
+                    reason = f"quota-exhausted ({response.status_code})" if response.status_code == 429 else f"auth/key error ({response.status_code})"
+                    _mark_gemini_key_exhausted(key_idx, reason)
+                    key_rotated = True
+                    break  # Break retry loop to try call with NEXT rotated key
+                elif response.status_code == 404:
+                    print(f"Gemini API 404 (Model Not Found) error. Bypassing retries to failover immediately.")
+                    raise ValueError(f"Gemini API returned 404: {response.text}")
+                else:
+                    raise ValueError(f"Gemini API error (Status {response.status_code}): {response.text}")
+            except Exception as e:
+                if key_rotated:
+                    break
+                if "404" in str(e):
+                    raise e
+                if attempt == max_retries - 1:
+                    raise e
+                print(f"Gemini call exception encountered. Retrying in {backoff + 2.0}s... Error: {str(e)}")
+                time.sleep(backoff + 2.0)
                 backoff *= 2.0
-            else:
-                raise ValueError(f"Gemini API error (Status {response.status_code}): {response.text}")
-        except Exception as e:
-            if "404" in str(e):
-                raise e
-            if attempt == max_retries - 1:
-                raise e
-            print(f"Gemini call exception encountered. Retrying in {backoff + 2.0}s... Error: {str(e)}")
-            time.sleep(backoff + 2.0) # Add delay to avoid back-to-back hits
-            backoff *= 2.0
-            
-    raise RuntimeError("Gemini API call failed after maximum retries.")
+
+        if not key_rotated:
+            raise RuntimeError("Gemini API call failed after maximum retries.")
 
 # Toggleable flag for DeepSeek-v4-pro thinking mode (disabled by default; retained as optional enhancement)
-# ENABLE_DEEPSEEK_THINKING_MODE: bool = True
 ENABLE_DEEPSEEK_THINKING_MODE: bool = False
 
 # Dynamic NIM model routing dictionary mapping agent types to optimized NVIDIA NIM models
 NIM_MODEL_ROUTING: Dict[str, str] = {
-    # Optional enhancement (disabled due to intermittent NVIDIA read timeouts with thinking-mode):
-    # "Finance Agent": "deepseek-ai/deepseek-v4-pro",
-    # "Risk Agent": "deepseek-ai/deepseek-v4-pro",
     "default": "meta/llama-3.1-70b-instruct",
 }
 
@@ -124,7 +211,7 @@ def call_nvidia_nim(
     response_format: dict = None,
 ) -> str:
     """
-    Calls the NVIDIA NIM API with built-in 429 rate limit backoff and dynamic model routing.
+    Calls the NVIDIA NIM API with built-in key rotation, 429 rate limit backoff, and dynamic model routing.
     
     Args:
         agent_name: Agent name or type used to dispatch to specific NIM models.
@@ -134,16 +221,9 @@ def call_nvidia_nim(
         response_format: Custom response format payload for structured output.
     """
     url = "https://integrate.api.nvidia.com/v1/chat/completions"
-    headers = {
-        "Authorization": f"Bearer {settings.NVIDIA_NIM_API_KEY}",
-        "Content-Type": "application/json"
-    }
-    
-    # Resolve model via dynamic routing dictionary
     model_id = NIM_MODEL_ROUTING.get(agent_name, NIM_MODEL_ROUTING["default"]) if agent_name else NIM_MODEL_ROUTING["default"]
     print(f"[NVIDIA NIM] Dispatching call for '{agent_name or 'Unspecified'}' -> Model: '{model_id}'")
     
-    # Adjust max_tokens: default 2048, bump to 8192 if agent_name contains "report" or "council"
     if agent_name and any(k in agent_name.lower() for k in ("report", "council")):
         if max_tokens < 8192:
             max_tokens = 8192
@@ -167,40 +247,120 @@ def call_nvidia_nim(
         payload["response_format"] = response_format
     elif json_mode:
         payload["response_format"] = {"type": "json_object"}
+
+    while True:
+        key_idx, api_key = _get_active_nvidia_key()
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json"
+        }
+        
+        max_retries = 3
+        backoff = 1.0
+        key_rotated = False
+        
+        for attempt in range(max_retries):
+            try:
+                response = httpx.post(url, json=payload, headers=headers, timeout=120.0)
+                if response.status_code == 200:
+                    res_data = response.json()
+                    return res_data["choices"][0]["message"]["content"]
+                elif response.status_code in (400, 401, 403, 429):
+                    reason = f"quota-exhausted ({response.status_code})" if response.status_code == 429 else f"auth/key error ({response.status_code})"
+                    _mark_nvidia_key_exhausted(key_idx, reason)
+                    key_rotated = True
+                    break  # Break retry loop to try call with NEXT rotated key
+                else:
+                    raise ValueError(f"NVIDIA NIM error (Status {response.status_code}): {response.text}")
+            except Exception as e:
+                if key_rotated:
+                    break
+                if attempt == max_retries - 1:
+                    raise e
+                time.sleep(backoff)
+                backoff *= 2.0
+
+        if not key_rotated:
+            raise RuntimeError(f"NVIDIA NIM call failed after maximum retries for model {model_id}.")
+
+def _clean_ollama_qwen_response(raw_text: str, json_mode: bool = False) -> str:
+    """
+    Cleans raw response from local Qwen3 model:
+    - Strips anything inside <think>...</think> tags.
+    - Strips anything before the first '{' or '[' and after the last '}' or ']' if json_mode is True or braces exist.
+    """
+    text = re.sub(r'<think>.*?</think>', '', str(raw_text or ''), flags=re.DOTALL).strip()
     
-    max_retries = 3
+    if json_mode or ('{' in text and '}' in text) or ('[' in text and ']' in text):
+        first_brace = -1
+        for i, char in enumerate(text):
+            if char in ('{', '['):
+                first_brace = i
+                break
+        last_brace = -1
+        for i in range(len(text) - 1, -1, -1):
+            if text[i] in ('}', ']'):
+                last_brace = i
+                break
+        if first_brace != -1 and last_brace != -1 and last_brace >= first_brace:
+            text = text[first_brace:last_brace + 1]
+            
+    return text
+
+def call_ollama(
+    prompt: str,
+    system_prompt: str = None,
+    max_tokens: int = 2048,
+    json_mode: bool = False,
+) -> str:
+    """
+    Calls the local Ollama API (qwen3:8b) via /api/generate as a 3rd last-resort fallback.
+    Passes "think": false to disable reasoning monologue, and cleans <think> tags & non-JSON boundaries.
+    """
+    base_url = settings.OLLAMA_BASE_URL.rstrip('/')
+    url = f"{base_url}/api/generate"
+    
+    payload: Dict[str, Any] = {
+        "model": settings.OLLAMA_MODEL,
+        "prompt": prompt,
+        "stream": False,
+        "think": False,
+    }
+    if system_prompt:
+        payload["system"] = system_prompt
+    if json_mode:
+        payload["format"] = "json"
+
+    max_retries = 2
     backoff = 1.0
     for attempt in range(max_retries):
         try:
-            # Increased timeout from 90.0 to 120.0 to reduce timeouts under heavy concurrent load
-            response = httpx.post(url, json=payload, headers=headers, timeout=120.0)
+            response = httpx.post(url, json=payload, timeout=120.0)
             if response.status_code == 200:
                 res_data = response.json()
-                return res_data["choices"][0]["message"]["content"]
-            elif response.status_code == 429:
-                print(f"NVIDIA NIM 429 rate limit hit ({model_id}). Attempt {attempt + 1}. Retrying in {backoff}s...")
-                time.sleep(backoff)
-                backoff *= 2.0
+                raw_text = res_data.get("response", "")
+                return _clean_ollama_qwen_response(raw_text, json_mode=json_mode)
             else:
-                raise ValueError(f"NVIDIA NIM error (Status {response.status_code}): {response.text}")
+                raise ValueError(f"Ollama API error (Status {response.status_code}): {response.text}")
         except Exception as e:
             if attempt == max_retries - 1:
                 raise e
             time.sleep(backoff)
             backoff *= 2.0
-            
-    raise RuntimeError(f"NVIDIA NIM call failed after maximum retries for model {model_id}.")
+
+    raise RuntimeError(f"Ollama API call failed for model {settings.OLLAMA_MODEL}.")
 
 # Per-run Gemini Circuit Breaker state
 _gemini_consecutive_failures: int = 0
 _gemini_marked_down: bool = False
 
 def reset_gemini_circuit_breaker() -> None:
-    """Resets the per-run Gemini circuit breaker state for a new pipeline run."""
+    """Resets the per-run Gemini circuit breaker state and key rotation pools for a new pipeline run."""
     global _gemini_consecutive_failures, _gemini_marked_down
     _gemini_consecutive_failures = 0
     _gemini_marked_down = False
-    print("[Circuit Breaker] Reset Gemini circuit breaker for new pipeline run.")
+    reset_llm_key_rotation()
+    print("[Circuit Breaker] Reset Gemini circuit breaker and key rotation pools for new pipeline run.")
 
 def is_gemini_marked_down() -> bool:
     """Returns True if Gemini is currently marked DOWN for this pipeline run."""
@@ -235,12 +395,6 @@ def call_llm(
     If BOTH providers fail, it does not raise an exception — instead:
       1. Logs the failure transaction to Supabase agent_logs (if project_id & agent_name are passed).
       2. Returns a structured error dictionary: {"status": "failed", "error": "Error details..."}
-    
-    Args:
-        max_tokens: Completion token budget passed to NVIDIA NIM. Default 2048 is fine for
-                    agent reasoning nodes. Long-form reports (Business Plan etc.) pass 8192.
-        response_schema: Optional JSON schema dict passed to Gemini.
-        json_mode: If True, enforces JSON mode / MIME type on model APIs.
     """
     primary_err = None
     fallback_err = None
@@ -298,8 +452,18 @@ def call_llm(
             fallback_err = str(e)
             print(f"ERROR: NVIDIA NIM fallback also failed. Error: {fallback_err}")
 
-    # 3. Dual provider failure cleanup & DB logging
-    combined_error = f"LLM Call Failed. Primary ({preferred_provider}): {primary_err}. Fallback: {fallback_err}."
+    # 3. Last-resort tertiary fallback to local Ollama (qwen3:8b) when BOTH cloud providers are down
+    print(f"[Local Fallback] Cloud exhausted — using local Ollama {settings.OLLAMA_MODEL}")
+    try:
+        return call_ollama(
+            prompt, system_prompt=system_prompt, max_tokens=max_tokens, json_mode=json_mode
+        )
+    except Exception as e:
+        ollama_err = str(e)
+        print(f"ERROR: Local Ollama fallback also failed. Error: {ollama_err}")
+
+    # 4. Triple provider failure cleanup & DB logging
+    combined_error = f"LLM Call Failed. Primary ({preferred_provider}): {primary_err}. Secondary: {fallback_err}. Tertiary (Ollama): {ollama_err}."
     
     if project_id and agent_name:
         try:
@@ -325,4 +489,3 @@ def call_llm(
         "status": "failed",
         "error": combined_error
     }
-
