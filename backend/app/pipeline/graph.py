@@ -1,165 +1,153 @@
-from langgraph.graph import StateGraph, END
-from app.pipeline.state import AgentState
-from app.pipeline.planning_agent import planning_agent_node
-from app.pipeline.orchestrator_agent import orchestrator_agent_node
-from app.pipeline.research_agent import research_agent_node
-from app.pipeline.specialized_agents import (
-    strategy_agent_node,
-    finance_agent_node,
-    marketing_agent_node,
-    risk_agent_node
-)
-from app.pipeline.council_agent import llm_council_node
-from app.pipeline.review_critic_agents import (
-    reviewer_agent_node,
-    critic_agent_node
-)
-from app.pipeline.rules_engine import business_rules_engine_node
-from app.pipeline.scoring_engine import analytics_scoring_node
-from app.pipeline.report_generator import report_generator_node
+import asyncio
 from typing import Dict, Any
+from app.pipeline.state import AgentState
+from app.pipeline.planning_agent import planning_node
+from app.pipeline.orchestrator_agent import orchestrator_node, research_node
+from app.pipeline.specialized_agents import finance_node, parallel_domain_eval
+from app.pipeline.council_agent import council_node
+from app.pipeline.review_critic_agents import reviewer_node, critic_node
+from app.pipeline.rules_engine import rules_node
+from app.pipeline.scoring_engine import scoring_node
+from app.pipeline.report_generator import report_generator_node
+from app.database.db import db
 
-# ---------------------------------------------------------------------------
-# Pipeline Gate Nodes
-# ---------------------------------------------------------------------------
+# Per-node timeout configuration (seconds)
+NODE_TIMEOUTS = {
+    "planning":         120,   # Planning Agent
+    "orchestrator":     60,    # Orchestrator Agent
+    "research":         90,    # Research Agent (web search can be slow)
+    "finance":          120,   # Finance Pricing Anchor (critical, needs headroom)
+    "parallel_domain":  180,   # 3 concurrent agents — Strategy, Marketing, Risk
+    "council":          120,   # LLM Council Debate
+    "reviewer":         90,    # Reviewer Agent
+    "critic":           90,    # Adversarial VC Critic
+    "rules":            30,    # Deterministic Rules (no LLM, fast)
+    "scoring":          15,    # Deterministic Scoring (no LLM, fast)
+    "report_gen":       360,   # 13 concurrent reports — largest workload
+}
 
-def pipeline_gate_node(state: AgentState) -> Dict[str, Any]:
+# Total pipeline hard-stop timeout (15 minutes headroom)
+PIPELINE_TIMEOUT = 900
+
+
+async def _run_with_timeout(node_fn, state: AgentState, node_name: str, project_id: str) -> AgentState:
     """
-    Gate 1: runs after all four specialized agents fan in.
-    If any agent wrote its key into failed_agents, marks the pipeline as
-    aborted so the conditional edge can route to END instead of Council.
+    Wraps a pipeline node with asyncio.wait_for timeout and logs timeout events.
     """
-    failed = state.get("failed_agents") or []
-    if failed:
-        abort_reason = (
-            f"Pipeline halted: specialized agent(s) exhausted all LLM fallbacks — "
-            f"failed nodes: {', '.join(failed)}"
+    timeout = NODE_TIMEOUTS.get(node_name, 120)
+    try:
+        return await asyncio.wait_for(node_fn(state), timeout=timeout)
+    except asyncio.TimeoutError:
+        error_msg = f"Node '{node_name}' timed out after {timeout}s. Pipeline continuing with partial state."
+        print(f"[Pipeline Timeout] {error_msg}")
+        await db.add_agent_discussion(
+            project_id=project_id,
+            agent_name="Timeout Sentry",
+            agent_role="Fault Detection",
+            message=error_msg,
+            step_index=98
         )
-        print(f"[Pipeline Gate] {abort_reason}")
-        return {"pipeline_aborted": True, "abort_reason": abort_reason}
-    print("[Pipeline Gate] All specialized agents succeeded — routing to Council.")
-    return {}
+        # For non-critical nodes, allow pipeline to continue with existing state
+        # For critical nodes (finance, report_gen), re-raise to halt
+        critical_nodes = {"finance", "report_gen"}
+        if node_name in critical_nodes:
+            raise RuntimeError(error_msg)
+        return state
 
 
-def post_critic_gate_node(state: AgentState) -> Dict[str, Any]:
+class PipelineGraph:
     """
-    Gate 2: runs after Critic (before Rules Engine).
-    If Reviewer or Critic wrote their key into failed_agents, aborts the
-    pipeline rather than feeding __FAILED__ into the Rules Engine and Scoring.
+    ECC-Optimized Multi-Agent Deliberation Pipeline with 2 Sentry Gates
+    and per-node timeout protection.
     """
-    failed = state.get("failed_agents") or []
-    # Only care about reviewer/critic failures here; specialized-agent failures
-    # would already have been caught by Gate 1 above.
-    post_council_failed = [f for f in failed if f in ("reviewer", "critic")]
-    if post_council_failed:
-        abort_reason = (
-            f"Pipeline halted: post-council agent(s) exhausted all LLM fallbacks — "
-            f"failed nodes: {', '.join(post_council_failed)}"
+    async def run(self, project_id: str, project_data: Dict[str, Any]) -> AgentState:
+        # Initial State
+        state: AgentState = {
+            "project_id": project_id,
+            "project_data": project_data,
+            "status": "deliberating",
+            "discussion_logs": []
+        }
+
+        await db.update_project(project_id, {"status": "deliberating"})
+        
+        # 0. Instant Session Initialization Message (zero latency user feedback)
+        await db.add_agent_discussion(
+            project_id=project_id,
+            agent_name="Pipeline Orchestrator",
+            agent_role="Session Initialization",
+            message=f"Autonomous boardroom convened for venture '{project_data.get('name', 'Venture')}'. Dispatching Lead Planning Architect...",
+            step_index=0
         )
-        print(f"[Post-Critic Gate] {abort_reason}")
-        return {"pipeline_aborted": True, "abort_reason": abort_reason}
-    # Also respect an abort that Gate 1 may have already set
-    if state.get("pipeline_aborted"):
-        return {}
-    print("[Post-Critic Gate] Reviewer and Critic succeeded — routing to Rules Engine.")
-    return {}
 
+        try:
+            # Wrap entire pipeline with hard-stop timeout
+            state = await asyncio.wait_for(
+                self._run_pipeline(state, project_id),
+                timeout=PIPELINE_TIMEOUT
+            )
+            state["status"] = "completed"
+            return state
 
-# ---------------------------------------------------------------------------
-# Conditional routing functions
-# ---------------------------------------------------------------------------
+        except asyncio.TimeoutError:
+            state["status"] = "failed"
+            error_msg = f"Pipeline exceeded hard-stop timeout of {PIPELINE_TIMEOUT}s."
+            print(f"[Pipeline Error] {error_msg}")
+            await db.update_project(project_id, {"status": "failed"})
+            await db.add_agent_discussion(
+                project_id=project_id,
+                agent_name="Pipeline Error Sentry",
+                agent_role="Timeout Containment",
+                message=error_msg,
+                step_index=99
+            )
+            return state
 
-def route_after_gate(state: AgentState) -> str:
-    """Routes to 'council' if pipeline is healthy, else to END."""
-    if state.get("pipeline_aborted"):
-        return END
-    return "council"
+        except Exception as e:
+            state["status"] = "failed"
+            print(f"[Pipeline Error] {e}")
+            await db.update_project(project_id, {"status": "failed"})
+            await db.add_agent_discussion(
+                project_id=project_id,
+                agent_name="Pipeline Error Sentry",
+                agent_role="Fault Containment",
+                message=f"Pipeline error halted execution: {str(e)}",
+                step_index=99
+            )
+            return state
 
+    async def _run_pipeline(self, state: AgentState, project_id: str) -> AgentState:
+        """Core pipeline execution with per-node timeouts."""
 
-def route_after_post_critic_gate(state: AgentState) -> str:
-    """Routes to 'rules_engine' if pipeline is healthy, else to END."""
-    if state.get("pipeline_aborted"):
-        return END
-    return "rules_engine"
+        # 1. Planning -> Orchestration -> Research
+        state = await _run_with_timeout(planning_node, state, "planning", project_id)
+        state = await _run_with_timeout(orchestrator_node, state, "orchestrator", project_id)
+        state = await _run_with_timeout(research_node, state, "research", project_id)
 
+        # 2. Finance Pricing Anchor -> Parallel Domains (Strategy, Marketing, Risk)
+        state = await _run_with_timeout(finance_node, state, "finance", project_id)
+        state = await _run_with_timeout(parallel_domain_eval, state, "parallel_domain", project_id)
 
-# ---------------------------------------------------------------------------
-# Graph construction
-# ---------------------------------------------------------------------------
+        # Gate 1 Sentry Check
+        if not state.get("finance_assessment"):
+            raise RuntimeError("Gate 1 Sentry Failure: Finance pricing anchor missing.")
 
-# 1. Initialize StateGraph with the custom AgentState TypedDict schema
-workflow = StateGraph(AgentState)
+        # 3. Boardroom Council -> Reviewer -> Adversarial Critic
+        state = await _run_with_timeout(council_node, state, "council", project_id)
+        state = await _run_with_timeout(reviewer_node, state, "reviewer", project_id)
+        state = await _run_with_timeout(critic_node, state, "critic", project_id)
 
-# 2. Register the nodes
-workflow.add_node("planning", planning_agent_node)
-workflow.add_node("orchestrator", orchestrator_agent_node)
-workflow.add_node("research", research_agent_node)
-workflow.add_node("strategy", strategy_agent_node)
-workflow.add_node("finance", finance_agent_node)
-workflow.add_node("marketing", marketing_agent_node)
-workflow.add_node("risk", risk_agent_node)
-workflow.add_node("pipeline_gate", pipeline_gate_node)
-workflow.add_node("council", llm_council_node)
-workflow.add_node("reviewer", reviewer_agent_node)
-workflow.add_node("critic", critic_agent_node)
-workflow.add_node("post_critic_gate", post_critic_gate_node)
-workflow.add_node("rules_engine", business_rules_engine_node)
-workflow.add_node("scoring", analytics_scoring_node)
-workflow.add_node("report_generator", report_generator_node)
+        # Gate 2 Sentry Check
+        if not state.get("critic_assessment"):
+            raise RuntimeError("Gate 2 Sentry Failure: Adversarial critique missing.")
 
-# 3. Configure execution routing
-workflow.set_entry_point("planning")
-workflow.add_edge("planning", "orchestrator")
-workflow.add_edge("orchestrator", "research")
+        # 4. Deterministic Rules -> Weighted Scoring
+        state = await _run_with_timeout(rules_node, state, "rules", project_id)
+        state = await _run_with_timeout(scoring_node, state, "scoring", project_id)
 
-# Fan-out to specialized agents:
-#   Finance and Risk run in parallel directly from Research.
-#   Strategy and Marketing BOTH run sequentially after Finance so they can
-#   read Finance's finalized pricing tiers from state before constructing
-#   their prompts. This keeps all three pricing sources (Strategy, Finance,
-#   Marketing) consistent for Business Rules Engine validation.
-workflow.add_edge("research", "finance")
-workflow.add_edge("research", "risk")
-workflow.add_edge("finance", "strategy")   # Strategy depends on Finance output
-workflow.add_edge("finance", "marketing")  # Marketing depends on Finance output
+        # 5. Concurrent 13-Report Generation
+        state = await _run_with_timeout(report_generator_node, state, "report_gen", project_id)
 
-# Fan-in through Gate 1 before Council.
-# Finance fans into both Strategy and Marketing (parallel after Finance).
-# Both Strategy and Marketing are terminal nodes of their branches and route
-# into the gate. Risk routes directly from Research into the gate.
-workflow.add_edge("strategy",  "pipeline_gate")
-workflow.add_edge("marketing", "pipeline_gate")
-workflow.add_edge("risk",      "pipeline_gate")
+        return state
 
-# Gate 1 conditional: healthy → Council, aborted → END
-workflow.add_conditional_edges("pipeline_gate", route_after_gate)
-
-# Sequence from Council through Reviewer → Critic → Gate 2
-workflow.add_edge("council", "reviewer")
-workflow.add_edge("reviewer", "critic")
-workflow.add_edge("critic", "post_critic_gate")
-
-# Gate 2 conditional: healthy → Rules Engine, aborted → END
-workflow.add_conditional_edges("post_critic_gate", route_after_post_critic_gate)
-
-workflow.add_edge("rules_engine", "scoring")
-workflow.add_edge("scoring", "report_generator")
-workflow.add_edge("report_generator", END)
-
-# 4. Compile the orchestrator pipeline workflow
-app = workflow.compile()
-
-def execute_pipeline(initial_state: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    Executes the compiled multi-agent LangGraph pipeline.
-    Invokes nodes starting from planning, through to parallel business agents,
-    council debate, review, critique, and rules validation.
-
-    Returns the final state dictionary. Callers should check:
-        result.get("pipeline_aborted") — True if a hard-gate fired.
-        result.get("abort_reason")     — Human-readable explanation.
-    """
-    from services.llm import reset_gemini_circuit_breaker, print_nim_model_dispatch_table
-    reset_gemini_circuit_breaker()
-    print_nim_model_dispatch_table()
-    return app.invoke(initial_state)
+pipeline_graph = PipelineGraph()

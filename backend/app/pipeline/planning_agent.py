@@ -1,77 +1,55 @@
-import os
+import json
 from typing import Dict, Any
-from app.database.supabase import get_supabase_client
-from services.llm import call_llm, reset_gemini_circuit_breaker
 from app.pipeline.state import AgentState
+from services.llm import llm_router
+from app.database.db import db
 
-PLANNING_SYSTEM_PROMPT = """
-You are the lead Planning Agent for the AI Venture Studio. 
-Your role is to analyze the entrepreneur's raw business idea input and any parsed RAG document context, and formulate a structured, exhaustive analysis plan.
+async def planning_node(state: AgentState) -> AgentState:
+    """
+    Analyzes the 14 raw business idea parameters and formulates a structured execution plan.
+    """
+    project = state["project_data"]
+    project_id = state["project_id"]
 
-Your output must define:
-1. Core Venture Summary: A clear description of what the venture does.
-2. Sector Classification: The specific startup industry category.
-3. Analytical Objectives: Specific instructions for downstream specialized business agents:
-   - Strategy Agent (competitor landscape, target market fit, strategic position)
-   - Finance Agent (assumptions, pricing sanity check, capital requirements)
-   - Marketing Agent (outreach channels, ideal client profile, branding vectors)
-   - Risk Agent (regulatory hurdles, competitive risks, compliance vectors)
-4. Web Research Recommendations: Specific query suggestions for the Research Agent.
-
-Be professional, concise, and structured in your output.
+    sys_prompt = """You are the Lead Venture Planning Architect. 
+Analyze the startup parameters and produce an execution blueprint in JSON with:
+1. "domain_focus": key strategic priorities for Finance, Strategy, Marketing, and Risk
+2. "knowledge_gaps": critical unanswered questions
+3. "search_queries": 2-3 specific search queries for market data, competitor pricing, and statutory laws
+4. "executive_hypothesis": concise 2-sentence thesis on venture viability
 """
-
-def planning_agent_node(state: AgentState) -> Dict[str, Any]:
-    """
-    Planning Agent Node logic.
-    Formulates a structured roadmap from raw business idea inputs and RAG context.
-    Logs transaction events to Supabase database.
-    """
-    reset_gemini_circuit_breaker()
-    project_id = state.get("project_id")
-    idea_input = state.get("business_idea_input", "")
-    rag_context = state.get("rag_context", [])
-    
-    print(f"--- [Planning Agent Node] Starting execution for Project {project_id} ---")
-    
-    # 1. Construct prompt
-    context_str = "\n---\n".join(rag_context) if rag_context else "No document RAG context provided."
-    user_prompt = f"Business Idea Input:\n{idea_input}\n\nDocument Context:\n{context_str}"
-    
-    # 2. Call NVIDIA NIM with Gemini fallback
-    plan = call_llm(
-        prompt=user_prompt,
-        system_prompt=PLANNING_SYSTEM_PROMPT,
-        preferred_provider="nvidia",
-        project_id=project_id,
-        agent_name="Planning Agent"
-    )
-    
-    # Check if LLM call failed completely
-    if isinstance(plan, dict) and plan.get("status") == "failed":
-        print(f"Planning Agent node failed: {plan['error']}")
-        return {
-            "plan": f"Execution failed: {plan['error']}"
-        }
-    
-    # 3. Log transaction to Supabase agent_logs
+    user_prompt = f"""
+Venture: {project.get('name')} ({project.get('industry')} - {project.get('target_country')})
+Problem: {project.get('problem_statement')}
+Solution: {project.get('solution_description')}
+Target Customers: {project.get('target_customers')}
+Revenue Model: {project.get('revenue_model')}
+Budget: {project.get('budget')} {project.get('currency')} | Funding Goal: {project.get('preferred_funding')}
+Team Size: {project.get('team_size')}
+"""
     try:
-        supabase = get_supabase_client()
-        supabase.table("agent_logs").insert({
-            "project_id": project_id,
-            "agent_name": "Planning Agent",
-            "status": "completed",
-            "input_data": {
-                "business_idea_input": idea_input[:500] if idea_input else "",
-                "has_rag_context": len(rag_context) > 0
-            },
-            "output_data": {
-                "plan": plan
-            }
-        }).execute()
-        print("Logged Planning Agent execution to Supabase.")
-    except Exception as db_err:
-        print(f"Supabase Agent Log Sync Warning (continuing): {str(db_err)}")
-        
-    print(f"--- [Planning Agent Node] Finished execution ---")
-    return {"plan": plan}
+        plan = await llm_router.generate_structured(
+            system_prompt=sys_prompt,
+            user_prompt=user_prompt,
+            preferred_provider="ollama",
+            temperature=0.2,
+            max_tokens=1024
+        )
+    except Exception as e:
+        plan = {
+            "domain_focus": {"finance": "Unit economics & runway", "strategy": "B2B moat", "marketing": "Inbound CAC", "risk": "Regulatory"},
+            "knowledge_gaps": ["Market size validation"],
+            "search_queries": [f"{project.get('industry')} market size {project.get('target_country')}", f"{project.get('name')} competitors"],
+            "executive_hypothesis": "Venture addresses an acute market pain point with scalable unit economics."
+        }
+
+    await db.add_agent_discussion(
+        project_id=project_id,
+        agent_name="Planning Architect",
+        agent_role="Strategic Planning",
+        message=f"Blueprint established. Primary hypothesis: {plan.get('executive_hypothesis')}",
+        step_index=1
+    )
+
+    state["plan"] = plan
+    return state

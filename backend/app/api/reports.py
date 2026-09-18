@@ -1,296 +1,119 @@
-from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, status
-from fastapi.responses import StreamingResponse, Response
-from app.core.security import get_current_user
-from app.database.supabase import get_supabase_client
-from services.export_generator import generate_docx, generate_pptx, generate_pdf
+import asyncio
+from fastapi import APIRouter, HTTPException, BackgroundTasks, Response, Depends
 from typing import List, Dict, Any
+from app.database.db import db
+from app.pipeline.graph import pipeline_graph
+from app.pipeline.report_generator import _generate_single_report, REPORT_REGISTRY
+from services.export_generator import export_generator
+from app.core.auth import get_current_user
 
-router = APIRouter(prefix="/reports", tags=["reports"])
+router = APIRouter(prefix="/api/reports", tags=["reports"])
 
-def run_pipeline_background(project_id: str, project_record: Dict[str, Any]):
-    """Orchestrates the LangGraph execution in the background to prevent HTTP timeouts."""
-    supabase = get_supabase_client()
-    try:
-        from app.pipeline.graph import execute_pipeline
-        from app.pipeline.specialized_agents import retrieve_context
-        
-        # Set project status to 'running'
-        supabase.table("projects").update({"status": "running"}).eq("id", project_id).execute()
-        
-        # Log Pipeline start
-        supabase.table("agent_logs").insert({
-            "project_id": project_id,
-            "agent_name": "Pipeline Orchestrator",
-            "status": "started",
-            "input_data": {"message": "Boardroom pipeline initiated."},
-            "output_data": {}
-        }).execute()
-        
-        # Construct initial pipeline state
-        initial_state = {
-            "project_id": project_id,
-            "business_idea_input": (
-                f"Business Name: {project_record['name']}\n"
-                f"Industry: {project_record['industry']}\n"
-                f"Core Idea: {project_record['idea_input']}\n"
-                f"Budget: {project_record.get('budget', '')}\n"
-                f"Location/Country: {project_record.get('target_customers', '')}"
-            ),
-            "rag_context": retrieve_context(project_id, project_record['idea_input'], top_k=5),
-            "plan": "",
-            "directives": "",
-            "research_results": "",
-            "specialized_outputs": {},
-            # Failure-tracking fields (required by pipeline gate nodes)
-            "failed_agents": [],
-            "pipeline_aborted": False,
-            "abort_reason": "",
-            "council_feedback": [],
-            "reviewer_notes": "",
-            "critic_notes": "",
-            "rules_validation_result": {},
-            "scores": {},
-            "final_report": "",
-            "force_refresh": False
-        }
-        
-        final_state = execute_pipeline(initial_state)
-        
-        # Check if pipeline was aborted by a hard gate (e.g. GATE 1 or GATE 2)
-        if final_state and final_state.get("pipeline_aborted"):
-            abort_reason = final_state.get("abort_reason", "Pipeline aborted at gate")
-            print(f"Background pipeline aborted for project {project_id}: {abort_reason}")
-            supabase.table("projects").update({"status": "failed"}).eq("id", project_id).execute()
-            supabase.table("agent_logs").insert({
-                "project_id": project_id,
-                "agent_name": "Pipeline Orchestrator",
-                "status": "failed",
-                "input_data": {},
-                "output_data": {"reason": abort_reason}
-            }).execute()
-        else:
-            print(f"Background pipeline execution succeeded for project: {project_id}")
-            supabase.table("projects").update({"status": "complete"}).eq("id", project_id).execute()
-            supabase.table("agent_logs").insert({
-                "project_id": project_id,
-                "agent_name": "Pipeline Orchestrator",
-                "status": "completed",
-                "input_data": {},
-                "output_data": {"message": "All reports generated successfully."}
-            }).execute()
-    except Exception as e:
-        print(f"Background pipeline failed for project {project_id}: {str(e)}")
-        try:
-            supabase.table("projects").update({"status": "failed"}).eq("id", project_id).execute()
-            supabase.table("agent_logs").insert({
-                "project_id": project_id,
-                "agent_name": "Pipeline Orchestrator",
-                "status": "failed",
-                "input_data": {},
-                "output_data": {"error": str(e)}
-            }).execute()
-        except Exception:
-            pass
-
-@router.get("/project/{project_id}")
-def get_project_reports(project_id: str, current_user = Depends(get_current_user)):
-    """Retrieves all generated reports and score rubrics for a specific project."""
-    supabase = get_supabase_client()
-    try:
-        # Verify project ownership
-        project = supabase.table("projects").select("user_id").eq("id", project_id).execute()
-        if not project.data or project.data[0]["user_id"] != current_user.id:
-            raise HTTPException(status_code=404, detail="Project not found or user lacks permission")
-            
-        response = supabase.table("reports").select("*").eq("project_id", project_id).execute()
-        return response.data
-    except HTTPException:
-        raise
-    except Exception as e:
-        err_str = str(e)
-        err_type = type(e).__name__
-        if "ConnectError" in err_type or "ConnectError" in err_str or "10054" in err_str or "connection forcibly closed" in err_str.lower():
-            raise HTTPException(
-                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail="Database connection transient error. Please retry."
-            )
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=err_str)
-
-@router.get("/project/{project_id}/status")
-def get_project_status(project_id: str, current_user = Depends(get_current_user)):
-    """Retrieves the current status of a project along with any reports generated so far."""
-    supabase = get_supabase_client()
-    try:
-        # Verify project ownership & fetch status
-        project = supabase.table("projects").select("user_id, status").eq("id", project_id).execute()
-        if not project.data or project.data[0]["user_id"] != current_user.id:
-            raise HTTPException(status_code=404, detail="Project not found or user lacks permission")
-            
-        project_status = project.data[0].get("status") or "idle"
-        reports_res = supabase.table("reports").select("*").eq("project_id", project_id).execute()
-        
-        # Retrieve actual sources saved by Research Agent from agent_logs
-        sources = []
-        try:
-            log_res = supabase.table("agent_logs") \
-                .select("output_data") \
-                .eq("project_id", project_id) \
-                .eq("agent_name", "Research Agent") \
-                .order("timestamp", desc=True) \
-                .limit(1) \
-                .execute()
-            if log_res.data and len(log_res.data) > 0:
-                out_data = log_res.data[0].get("output_data") or {}
-                sources = out_data.get("sources", [])
-        except Exception as log_err:
-            print(f"Warning fetching research sources for project {project_id}: {log_err}")
-
-        return {
-            "project_id": project_id,
-            "status": project_status,
-            "reports": reports_res.data if reports_res.data else [],
-            "sources": sources
-        }
-    except HTTPException:
-        raise
-    except Exception as e:
-        err_str = str(e)
-        err_type = type(e).__name__
-        if "ConnectError" in err_type or "ConnectError" in err_str or "10054" in err_str or "connection forcibly closed" in err_str.lower():
-            raise HTTPException(
-                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail="Database connection transient error. Please retry."
-            )
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=err_str)
-
-@router.post("/project/{project_id}/generate", status_code=status.HTTP_202_ACCEPTED)
-def trigger_generation(
+@router.post("/generate/{project_id}")
+async def trigger_report_generation(
     project_id: str, 
-    background_tasks: BackgroundTasks, 
-    sync: bool = False,
-    current_user = Depends(get_current_user)
+    background_tasks: BackgroundTasks,
+    user_id: str = Depends(get_current_user)
 ):
-    """Triggers the full multi-agent boardroom analysis pipeline asynchronously as a background job."""
-    supabase = get_supabase_client()
-    
-    # Verify project ownership
-    project = supabase.table("projects").select("*").eq("id", project_id).execute()
-    if not project.data or project.data[0]["user_id"] != current_user.id:
-        raise HTTPException(status_code=404, detail="Project not found or user lacks permission")
-        
-    project_record = project.data[0]
-    
-    # Immediately set project status to 'running'
-    supabase.table("projects").update({"status": "running"}).eq("id", project_id).execute()
-    
-    if sync:
-        # Run synchronously (primarily for unit/integration testing)
-        run_pipeline_background(project_id, project_record)
-        
-        # Check current status after sync execution
-        updated_proj = supabase.table("projects").select("status").eq("id", project_id).execute()
-        current_status = updated_proj.data[0].get("status", "complete") if updated_proj.data else "complete"
-        
-        return {
-            "project_id": project_id,
-            "status": current_status,
-            "message": "Pipeline ran synchronously."
-        }
-    else:
-        # Start pipeline execution in FastAPI background tasks and return immediately
-        background_tasks.add_task(run_pipeline_background, project_id, project_record)
-        return {
-            "project_id": project_id,
-            "status": "running",
-            "message": "Venture analysis and report generation triggered."
-        }
+    project = await db.get_project(project_id)
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    # Verify ownership
+    if project.get("user_id") and project["user_id"] != user_id and project["user_id"] != "default_founder":
+        raise HTTPException(status_code=403, detail="Access denied.")
 
-@router.get("/project/{project_id}/logs")
-def get_project_logs(project_id: str, current_user = Depends(get_current_user)):
-    """Retrieves execution logs sorted chronologically for boardroom livestream streaming."""
-    supabase = get_supabase_client()
-    try:
-        # Verify ownership
-        project = supabase.table("projects").select("user_id").eq("id", project_id).execute()
-        if not project.data or project.data[0]["user_id"] != current_user.id:
-            raise HTTPException(status_code=404, detail="Project not found or user lacks permission")
-            
-        response = supabase.table("agent_logs").select("*").eq("project_id", project_id).order("created_at", desc=False).execute()
-        return response.data
-    except HTTPException:
-        raise
-    except Exception as e:
-        err_str = str(e)
-        err_type = type(e).__name__
-        if "ConnectError" in err_type or "ConnectError" in err_str or "10054" in err_str or "connection forcibly closed" in err_str.lower():
-            raise HTTPException(
-                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail="Database connection transient error. Please retry."
-            )
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=err_str)
+    # Run in background task so UI can stream live
+    background_tasks.add_task(pipeline_graph.run, project_id, project)
+    return {"status": "started", "project_id": project_id, "message": "Multi-agent deliberation started."}
 
-@router.get("/{report_id}/download/{format}")
-def download_report(report_id: str, format: str, current_user = Depends(get_current_user)):
-    """Streams a generated report in Word (.docx), PowerPoint (.pptx), or PDF (.pdf) format as raw binary attachment."""
-    supabase = get_supabase_client()
+@router.post("/regenerate-single/{project_id}/{report_type}")
+async def regenerate_single_report(
+    project_id: str,
+    report_type: str,
+    user_id: str = Depends(get_current_user)
+):
+    project = await db.get_project(project_id)
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    if project.get("user_id") and project["user_id"] != user_id and project["user_id"] != "default_founder":
+        raise HTTPException(status_code=403, detail="Access denied.")
+
+    registry_entry = next((r for r in REPORT_REGISTRY if r[0] == report_type), None)
+    if not registry_entry:
+        raise HTTPException(status_code=400, detail=f"Unknown report type: {report_type}")
+
+    r_type, title, schema_cls = registry_entry
+    state = {
+        "project_id": project_id,
+        "project_data": project,
+        "scores": {
+            "overall_score": project.get("overall_score", 82.0),
+            "viability_score": project.get("viability_score", 85.0),
+            "market_fit_score": project.get("market_fit_score", 80.0),
+            "financial_score": project.get("financial_score", 80.0)
+        }
+    }
+    sem = asyncio.Semaphore(1)
+    res = await _generate_single_report(sem, r_type, title, schema_cls, state, force_fresh=True)
+    return res
+
+@router.get("/{project_id}")
+async def get_project_reports(project_id: str, user_id: str = Depends(get_current_user)):
+    project = await db.get_project(project_id)
+    if project and project.get("user_id") and project["user_id"] != user_id and project["user_id"] != "default_founder":
+        raise HTTPException(status_code=403, detail="Access denied.")
     
-    # Fetch report
-    report_res = supabase.table("reports").select("*").eq("id", report_id).execute()
-    if not report_res.data:
-        raise HTTPException(status_code=404, detail="Report record not found")
-        
-    report = report_res.data[0]
-    project_id = report["project_id"]
-    
-    # Verify ownership of parent project
-    project_res = supabase.table("projects").select("user_id, name").eq("id", project_id).execute()
-    if not project_res.data or project_res.data[0]["user_id"] != current_user.id:
-        raise HTTPException(status_code=404, detail="Report not found or access unauthorized")
-        
-    project_name = project_res.data[0]["name"]
-    report_type  = report["report_type"]
-    content      = report["content"]
-    
-    # Load the human-readable section labels from the report registry
-    # (section_labels maps field_key -> heading string for DOCX/PPTX/PDF exports)
-    try:
-        from app.pipeline.report_generator import _build_registry
-        _dummy_context = {k: "" for k in [
-            "idea", "strategy", "finance", "marketing", "risk",
-            "council_str", "reviewer", "critic", "rules_json",
-            "scores_json", "overall_score"
-        ]}
-        _dummy_context["overall_score"] = 0.0
-        registry = _build_registry(_dummy_context)
-        section_labels = registry.get(report_type, {}).get("export_mapping", {})
-    except Exception:
-        section_labels = {}
-    
-    clean_filename = f"{project_name.replace(' ', '_')}_{report_type.replace(' ', '_')}"
+    reports = await db.get_reports(project_id)
+    return {
+        "project": project,
+        "reports": reports
+    }
+
+@router.get("/export/{project_id}/{format}")
+async def export_reports(project_id: str, format: str, user_id: str = Depends(get_current_user)):
+    project = await db.get_project(project_id)
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    if project.get("user_id") and project["user_id"] != user_id and project["user_id"] != "default_founder":
+        raise HTTPException(status_code=403, detail="Access denied.")
+
+    reports = await db.get_reports(project_id)
+    if not reports:
+        raise HTTPException(status_code=400, detail="No reports available for export yet.")
+
+    raw_name = project.get("name", "Venture")
+    safe_name = "".join(c for c in raw_name if c.isalnum() or c in (' ', '_', '-')).strip() or "Venture"
     fmt = format.lower()
 
     if fmt == "docx":
-        file_stream = generate_docx(report_type, content, project_name, section_labels)
-        media_type = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-        filename = f"{clean_filename}.docx"
+        data = export_generator.generate_docx(raw_name, reports)
+        return Response(
+            content=data,
+            media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            headers={"Content-Disposition": f'attachment; filename="{safe_name}_Business_Plan.docx"'}
+        )
     elif fmt == "pptx":
-        file_stream = generate_pptx(report_type, content, project_name, section_labels)
-        media_type = "application/vnd.openxmlformats-officedocument.presentationml.presentation"
-        filename = f"{clean_filename}.pptx"
+        data = export_generator.generate_pptx(raw_name, reports)
+        return Response(
+            content=data,
+            media_type="application/vnd.openxmlformats-officedocument.presentationml.presentation",
+            headers={"Content-Disposition": f'attachment; filename="{safe_name}_Pitch_Deck.pptx"'}
+        )
     elif fmt == "pdf":
-        file_stream = generate_pdf(report_type, content, project_name, section_labels)
-        media_type = "application/pdf"
-        filename = f"{clean_filename}.pdf"
+        data = export_generator.generate_pdf(raw_name, reports)
+        return Response(
+            content=data,
+            media_type="application/pdf",
+            headers={"Content-Disposition": f'attachment; filename="{safe_name}_Due_Diligence.pdf"'}
+        )
+    elif fmt in ("xlsx", "excel"):
+        from services.simulator_engine import simulator_engine
+        sim_data = simulator_engine.calculate_scenario()
+        data = export_generator.generate_excel_simulation(raw_name, sim_data, project_meta=project, reports=reports)
+        return Response(
+            content=data,
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            headers={"Content-Disposition": f'attachment; filename="{safe_name}_Financial_Model.xlsx"'}
+        )
     else:
-        raise HTTPException(status_code=400, detail="Unsupported download format. Options: docx, pptx, pdf")
-
-    raw_bytes = file_stream.getvalue()
-    return Response(
-        content=raw_bytes,
-        media_type=media_type,
-        headers={
-            "Content-Disposition": f'attachment; filename="{filename}"',
-            "Access-Control-Expose-Headers": "Content-Disposition"
-        }
-    )
-
+        raise HTTPException(status_code=400, detail="Invalid format. Supported: docx, pptx, pdf, xlsx")

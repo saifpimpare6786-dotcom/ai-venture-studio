@@ -1,129 +1,130 @@
+import io
+import re
 import os
-import pandas as pd
-import fitz  # PyMuPDF
-from docx import Document
-from pptx import Presentation
-from typing import List
+import hashlib
+from typing import Dict, Any, List
 
-def extract_text_from_pdf(file_path: str) -> str:
-    """Extracts text content from a PDF file using PyMuPDF."""
-    text = ""
-    try:
-        with fitz.open(file_path) as doc:
-            for page in doc:
-                text += page.get_text() + "\n"
-    except Exception as e:
-        raise ValueError(f"Error reading PDF file: {str(e)}")
-    return text
+class DocumentParser:
+    @staticmethod
+    def compute_sha256(content_bytes: bytes) -> str:
+        return hashlib.sha256(content_bytes).hexdigest()
 
-def extract_text_from_docx(file_path: str) -> str:
-    """Extracts paragraph and table text content from a DOCX file."""
-    text = ""
-    try:
-        doc = Document(file_path)
-        for para in doc.paragraphs:
-            if para.text.strip():
-                text += para.text + "\n"
-        for table in doc.tables:
-            for row in table.rows:
-                row_text = [cell.text.strip() for cell in row.cells]
-                text += " | ".join(row_text) + "\n"
-    except Exception as e:
-        raise ValueError(f"Error reading DOCX file: {str(e)}")
-    return text
+    @staticmethod
+    def sanitize_text(text: str) -> str:
+        """Strip dangerous formula injection prefixes (=cmd, @SUM) and excessive whitespace."""
+        lines = text.splitlines()
+        sanitized = []
+        for line in lines:
+            stripped = line.strip()
+            if stripped.startswith(('=', '+', '-', '@')) and any(cmd in stripped.lower() for cmd in ['cmd', 'powershell', 'exec', 'calc']):
+                stripped = "'" + stripped  # neutralise formula execution
+            sanitized.append(stripped)
+        return "\n".join(sanitized)
 
-def extract_text_from_pptx(file_path: str) -> str:
-    """Extracts text content from slide shapes in a PPTX file."""
-    text = ""
-    try:
-        prs = Presentation(file_path)
-        for slide in prs.slides:
-            for shape in slide.shapes:
-                if hasattr(shape, "text") and shape.text.strip():
-                    text += shape.text + "\n"
-    except Exception as e:
-        raise ValueError(f"Error reading PPTX file: {str(e)}")
-    return text
-
-def extract_text_from_excel(file_path: str) -> str:
-    """Extracts sheets from an Excel file, converting them to markdown tables."""
-    text = ""
-    try:
-        xl = pd.ExcelFile(file_path)
-        for sheet_name in xl.sheet_names:
-            df = xl.parse(sheet_name)
-            text += f"Sheet: {sheet_name}\n"
-            text += df.to_markdown(index=False) + "\n\n"
-    except Exception as e:
+    @staticmethod
+    def parse_excel_or_csv(file_bytes: bytes, filename: str) -> str:
+        """Convert Excel spreadsheets or CSV files into structured Markdown tables."""
         try:
-            df = pd.read_excel(file_path)
-            text += df.to_string(index=False)
-        except Exception as e2:
-            raise ValueError(f"Error reading Excel file: {str(e2)}")
-    return text
+            import pandas as pd
+            if filename.endswith(".csv"):
+                df = pd.read_csv(io.BytesIO(file_bytes))
+                return f"### File: {filename}\n\n" + df.to_markdown(index=False)
+            else:
+                excel_file = pd.ExcelFile(io.BytesIO(file_bytes))
+                output = [f"### Excel Workbook: {filename}\n"]
+                for sheet_name in excel_file.sheet_names:
+                    df = pd.read_excel(excel_file, sheet_name=sheet_name)
+                    output.append(f"#### Sheet: {sheet_name}")
+                    output.append(df.to_markdown(index=False))
+                    output.append("\n")
+                return "\n".join(output)
+        except Exception as e:
+            return f"Error parsing spreadsheet {filename}: {str(e)}"
 
-def extract_text_from_csv(file_path: str) -> str:
-    """Converts CSV table records to markdown table representation."""
-    try:
-        df = pd.read_csv(file_path)
-        return df.to_markdown(index=False)
-    except Exception as e:
-        raise ValueError(f"Error reading CSV file: {str(e)}")
+    @staticmethod
+    def parse_pdf(file_bytes: bytes, filename: str) -> str:
+        """Extract text page-by-page using PyMuPDF (fitz)."""
+        try:
+            import fitz
+            doc = fitz.open(stream=file_bytes, filetype="pdf")
+            pages = [f"### PDF Document: {filename}"]
+            for i, page in enumerate(doc):
+                text = page.get_text()
+                if text.strip():
+                    pages.append(f"--- Page {i+1} ---\n{text.strip()}")
+            return "\n\n".join(pages)
+        except Exception as e:
+            return f"Error parsing PDF {filename}: {str(e)}"
 
-def extract_text_from_txt(file_path: str) -> str:
-    """Extracts text from a plain TXT or markdown file."""
-    try:
-        with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
-            return f.read()
-    except Exception as e:
-        raise ValueError(f"Error reading TXT file: {str(e)}")
+    @staticmethod
+    def parse_docx(file_bytes: bytes, filename: str) -> str:
+        """Extract paragraphs and tables using python-docx."""
+        try:
+            import docx
+            doc = docx.Document(io.BytesIO(file_bytes))
+            content = [f"### Word Document: {filename}\n"]
+            for p in doc.paragraphs:
+                if p.text.strip():
+                    content.append(p.text.strip())
+            for t in doc.tables:
+                table_data = []
+                for row in t.rows:
+                    row_text = [cell.text.strip() for cell in row.cells]
+                    table_data.append(" | ".join(row_text))
+                if table_data:
+                    content.append("\nTable:\n" + "\n".join(table_data) + "\n")
+            return "\n\n".join(content)
+        except Exception as e:
+            return f"Error parsing DOCX {filename}: {str(e)}"
 
-def extract_text(file_path: str, filename: str) -> str:
-    """
-    Main entry point for document text extraction.
-    Ensures file-specific parser wrapping and error containment.
-    """
-    ext = os.path.splitext(filename)[1].lower()
-    if ext == ".pdf":
-        return extract_text_from_pdf(file_path)
-    elif ext in [".docx", ".doc"]:
-        return extract_text_from_docx(file_path)
-    elif ext in [".pptx", ".ppt"]:
-        return extract_text_from_pptx(file_path)
-    elif ext in [".xlsx", ".xls"]:
-        return extract_text_from_excel(file_path)
-    elif ext == ".csv":
-        return extract_text_from_csv(file_path)
-    elif ext in [".txt", ".md"]:
-        return extract_text_from_txt(file_path)
-    else:
-        raise ValueError(f"Unsupported file extension: {ext}")
+    @staticmethod
+    def parse_pptx(file_bytes: bytes, filename: str) -> str:
+        """Extract slide texts using python-pptx."""
+        try:
+            from pptx import Presentation
+            prs = Presentation(io.BytesIO(file_bytes))
+            content = [f"### PowerPoint Presentation: {filename}\n"]
+            for i, slide in enumerate(prs.slides):
+                slide_text = []
+                for shape in slide.shapes:
+                    if hasattr(shape, "text") and shape.text.strip():
+                        slide_text.append(shape.text.strip())
+                if slide_text:
+                    content.append(f"--- Slide {i+1} ---\n" + "\n".join(slide_text))
+            return "\n\n".join(content)
+        except Exception as e:
+            return f"Error parsing PPTX {filename}: {str(e)}"
 
-def chunk_text(text: str, chunk_size: int = 400, overlap: int = 50) -> List[str]:
-    """
-    Splits text into semantic chunks of roughly chunk_size words, 
-    with a designated context overlap. Respects paragraph spacing where possible.
-    """
-    paragraphs = text.split("\n")
-    chunks = []
-    current_chunk = []
-    current_word_count = 0
-
-    for para in paragraphs:
-        if not para.strip():
-            continue
-        words = para.split()
-        if current_word_count + len(words) > chunk_size and current_chunk:
-            chunks.append(" ".join(current_chunk))
-            # Capture overlap text
-            overlap_words = current_chunk[-overlap:] if len(current_chunk) > overlap else current_chunk
-            current_chunk = list(overlap_words)
-            current_word_count = sum(len(w.split()) for w in current_chunk)
+    @classmethod
+    def parse_document(cls, file_bytes: bytes, filename: str) -> Dict[str, Any]:
+        """Auto-detect extension, parse in-memory, compute SHA-256 hash, and sanitize."""
+        sha256 = cls.compute_sha256(file_bytes)
+        ext = filename.lower().split('.')[-1] if '.' in filename else ''
         
-        current_chunk.append(para)
-        current_word_count += len(words)
+        if ext in ('xlsx', 'xls', 'csv'):
+            text = cls.parse_excel_or_csv(file_bytes, filename)
+            doc_type = 'spreadsheet'
+        elif ext == 'pdf':
+            text = cls.parse_pdf(file_bytes, filename)
+            doc_type = 'pdf'
+        elif ext in ('docx', 'doc'):
+            text = cls.parse_docx(file_bytes, filename)
+            doc_type = 'word'
+        elif ext in ('pptx', 'ppt'):
+            text = cls.parse_pptx(file_bytes, filename)
+            doc_type = 'presentation'
+        else:
+            text = file_bytes.decode('utf-8', errors='ignore')
+            doc_type = 'text'
 
-    if current_chunk:
-        chunks.append(" ".join(current_chunk))
-    
-    return chunks
+        sanitized_text = cls.sanitize_text(text)
+        return {
+            "filename": filename,
+            "file_type": ext,
+            "doc_type": doc_type,
+            "sha256": sha256,
+            "text": sanitized_text,
+            "size_bytes": len(file_bytes)
+        }
+
+document_parser = DocumentParser()

@@ -7,4 +7,6 @@ dist/
 build/
 .next/
 chroma_db/
-chroma_db_test/
+chroma_db_test/
+*.db-journal
+*.sqlite3-journal

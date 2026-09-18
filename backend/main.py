@@ -1,46 +1,56 @@
+import uvicorn
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from app.core.config import settings
-from app.api import projects, documents, reports
+from contextlib import asynccontextmanager
 
-from services.llm import print_nim_model_dispatch_table
+from app.core.config import settings
+from app.database.db import db
+from app.api.projects import router as projects_router
+from app.api.documents import router as documents_router
+from app.api.reports import router as reports_router
+from app.api.simulator import router as simulator_router
+from app.api.stream import router as stream_router
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Startup: Initialize SQLite DB tables if not using Supabase
+    await db.init_sqlite()
+    print(f"[AI Venture Studio] Backend initialized. LLM Provider: {settings.DEFAULT_LLM_PROVIDER} ({settings.OLLAMA_MODEL})")
+    yield
+    # Shutdown
+    print("[AI Venture Studio] Backend shutdown cleanly.")
 
 app = FastAPI(
     title=settings.PROJECT_NAME,
-    description="Backend API for AI Venture Studio",
-    version="1.0.0"
+    version=settings.VERSION,
+    lifespan=lifespan
 )
 
-@app.on_event("startup")
-def startup_event():
-    """Prints the NIM model dispatch routing table on application startup."""
-    print_nim_model_dispatch_table()
-
-# CORS configuration to allow local development (http://localhost:5173) and production deployment origins
-allowed_origins = [origin.strip() for origin in settings.CORS_ORIGINS.split(",") if origin.strip()]
-
+# Enable CORS for React Frontend
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=allowed_origins,
+    allow_origins=settings.cors_origin_list + ["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# Register routers
-app.include_router(projects.router, prefix="/api")
-app.include_router(documents.router, prefix="/api")
-app.include_router(reports.router, prefix="/api")
+# Include Routers
+app.include_router(projects_router)
+app.include_router(documents_router)
+app.include_router(reports_router)
+app.include_router(simulator_router)
+app.include_router(stream_router)
 
 @app.get("/health")
-def health_check():
-    """
-    Health check endpoint to verify server status.
-    This also serves as a warm-up ping for Render free-tier spin-up.
-    """
-    return {"status": "healthy", "project": settings.PROJECT_NAME}
+async def health_check():
+    return {
+        "status": "healthy",
+        "version": settings.VERSION,
+        "llm_provider": settings.DEFAULT_LLM_PROVIDER,
+        "ollama_model": settings.OLLAMA_MODEL,
+        "prefer_local": settings.PREFER_LOCAL_OLLAMA
+    }
 
 if __name__ == "__main__":
-    import uvicorn
-    # Start the server if executing this script directly
-    uvicorn.run("main:app", host="0.0.0.0", port=settings.PORT, reload=True)
+    uvicorn.run("main:app", host="0.0.0.0", port=settings.PORT, reload=settings.DEBUG)

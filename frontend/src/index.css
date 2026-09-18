@@ -1,111 +1,299 @@
-@import "tailwindcss";
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
 
-@theme {
-  --color-background: #F8F9FB;
-  --color-card: #FFFFFF;
-  --color-card-hover: #FAFAFC;
-  --color-primary: #5B4CE0;
-  --color-primary-hover: #4C3ECC;
-  --color-primary-light: #F0EEFF;
-  --color-secondary: #0EA5A5;
-  --color-secondary-light: #E6F7F7;
-  --color-border: #E4E7EC;
-  --color-border-dark: #D0D5DD;
-  --color-text-primary: #1A1D23;
-  --color-text-secondary: #4B5565;
-  --color-text-muted: #98A2B3;
-  --color-accent: #5B4CE0;
-}
-
-/* Base Light Theme Setup */
 @layer base {
   body {
-    background-color: #F8F9FB;
+    @apply bg-[#080B11] text-slate-100 antialiased font-sans;
     background-image: 
-      radial-gradient(at 0% 0%, rgba(91, 76, 224, 0.03) 0px, transparent 50%),
-      radial-gradient(at 100% 100%, rgba(14, 165, 165, 0.03) 0px, transparent 50%);
-    color: #4B5565;
-    font-family: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-    line-height: 1.6;
-    min-height: 100vh;
-    overflow-x: hidden;
-    -webkit-font-smoothing: antialiased;
-  }
-
-  h1, h2, h3, h4, h5, h6 {
-    color: #1A1D23;
-    font-weight: 700;
-    letter-spacing: -0.02em;
+      radial-gradient(at 0% 0%, rgba(99, 102, 241, 0.12) 0px, transparent 50%),
+      radial-gradient(at 100% 0%, rgba(212, 175, 55, 0.08) 0px, transparent 40%),
+      radial-gradient(at 50% 100%, rgba(16, 185, 129, 0.06) 0px, transparent 50%),
+      linear-gradient(to right, rgba(255, 255, 255, 0.015) 1px, transparent 1px),
+      linear-gradient(to bottom, rgba(255, 255, 255, 0.015) 1px, transparent 1px);
+    background-size: 100% 100%, 100% 100%, 100% 100%, 32px 32px, 32px 32px;
+    background-attachment: fixed;
   }
 }
 
-/* Exhibit Card System (Light Consulting Aesthetic) */
-.exhibit-card, .glass-card, .glass {
-  background-color: #FFFFFF;
-  border: 1px solid #E4E7EC;
-  box-shadow: 0 1px 3px 0 rgba(16, 24, 40, 0.06), 0 1px 2px -1px rgba(16, 24, 40, 0.04);
-  transition: all 0.2s ease-in-out;
+:root {
+  --ease-spring: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-bounce: cubic-bezier(0.34, 1.56, 0.64, 1);
+  --ease-smooth: cubic-bezier(0.25, 0.1, 0.25, 1);
 }
 
-.exhibit-card:hover, .glass-card:hover {
-  border-color: #D0D5DD;
-  box-shadow: 0 4px 12px -2px rgba(16, 24, 40, 0.08), 0 2px 6px -1px rgba(16, 24, 40, 0.04);
+.glass-panel {
+  background: rgba(15, 23, 42, 0.75);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  box-shadow: 0 4px 20px -2px rgba(0, 0, 0, 0.4);
+  transition: border-color 0.2s var(--ease-spring), transform 0.2s var(--ease-spring), box-shadow 0.2s var(--ease-spring);
 }
 
-/* Consulting Exhibit Title & Left-Tick Header Utility */
-.exhibit-section-title {
-  border-left: 3px solid #5B4CE0;
-  padding-left: 0.75rem;
-  font-size: 0.75rem;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-  color: #1A1D23;
+.glass-panel:hover {
+  border-color: rgba(255, 255, 255, 0.15);
 }
 
-/* Small Caps / Kicker Label Utility */
-.kicker-label {
-  font-size: 0.6875rem;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.1em;
-  color: #98A2B3;
+.glass-panel-gold {
+  background: linear-gradient(135deg, rgba(212, 175, 55, 0.06) 0%, rgba(15, 23, 42, 0.85) 100%);
+  backdrop-filter: blur(16px);
+  border: 1px solid rgba(212, 175, 55, 0.25);
+  box-shadow: 0 8px 30px -4px rgba(212, 175, 55, 0.1);
 }
 
-/* Form Input Focus Utilities */
-.consulting-input {
-  background-color: #FFFFFF;
-  border: 1px solid #E4E7EC;
-  color: #1A1D23;
-  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+.glass-panel-elevated {
+  background: rgba(30, 41, 59, 0.85);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  box-shadow: 0 20px 40px -10px rgba(0, 0, 0, 0.6);
+  transition: all 0.25s var(--ease-spring);
 }
 
-.consulting-input:focus {
+.glass-input {
+  background: rgba(15, 23, 42, 0.6);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  color: #F8FAFC;
+  transition: border-color 0.2s var(--ease-spring), box-shadow 0.2s var(--ease-spring), transform 0.15s var(--ease-spring);
+}
+
+.glass-input:focus {
+  border-color: #6366F1;
+  box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.25);
   outline: none;
-  border-color: #5B4CE0;
-  box-shadow: 0 0 0 3px rgba(91, 76, 224, 0.12);
+  transform: translateY(-0.5px);
 }
 
-.consulting-input::placeholder {
-  color: #98A2B3;
+/* Interactive Spring Hover Helpers */
+.spring-hover {
+  transition: transform 0.2s var(--ease-spring), box-shadow 0.2s var(--ease-spring);
+}
+.spring-hover:hover {
+  transform: translateY(-2px);
+}
+.spring-hover:active {
+  transform: scale(0.98);
 }
 
-/* Custom Scrollbars for Light Theme */
+/* Micro-interaction Button Click Feedback */
+.btn-press {
+  transition: transform 0.15s var(--ease-bounce), opacity 0.15s ease;
+}
+.btn-press:active {
+  transform: scale(0.96);
+}
+
+/* Custom Sleek Scrollbar */
 ::-webkit-scrollbar {
   width: 6px;
   height: 6px;
 }
 
 ::-webkit-scrollbar-track {
-  background: #F1F5F9;
+  background: rgba(15, 23, 42, 0.5);
 }
 
 ::-webkit-scrollbar-thumb {
-  background: #CBD5E1;
-  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.15);
+  border-radius: 9999px;
+  transition: background 0.2s ease;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: #94A3B8;
+  background: rgba(255, 255, 255, 0.35);
+}
+
+/* Animations */
+@keyframes pulse-slow {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.6; transform: scale(0.98); }
+}
+
+.animate-pulse-slow {
+  animation: pulse-slow 3s infinite ease-in-out;
+}
+
+/* Staggered Message Entrance (Emil Kowalski Stream Pattern) */
+@keyframes msg-stagger-in {
+  0% {
+    opacity: 0;
+    transform: translateY(10px) scale(0.98);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.animate-msg-enter {
+  animation: msg-stagger-in 0.35s var(--ease-spring) forwards;
+  will-change: transform, opacity;
+}
+
+/* Active Speaker Pulse Ring */
+@keyframes speaker-ring {
+  0% {
+    box-shadow: 0 0 0 0 rgba(99, 102, 241, 0.6);
+  }
+  70% {
+    box-shadow: 0 0 0 8px rgba(99, 102, 241, 0);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(99, 102, 241, 0);
+  }
+}
+
+.animate-speaker-ring {
+  animation: speaker-ring 2s infinite var(--ease-smooth);
+}
+
+/* Wizard Directional Step Slide */
+@keyframes step-slide-in {
+  0% {
+    opacity: 0;
+    transform: translateX(12px);
+  }
+  100% {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+.animate-step-slide {
+  animation: step-slide-in 0.3s var(--ease-spring) forwards;
+}
+
+/* Radar & Wedge Glowing Auras */
+@keyframes radar-pulse-wave {
+  0% {
+    transform: scale(0.95);
+    box-shadow: 0 0 0 0 rgba(6, 182, 212, 0.7), 0 0 20px rgba(212, 175, 55, 0.4);
+  }
+  70% {
+    transform: scale(1);
+    box-shadow: 0 0 0 14px rgba(6, 182, 212, 0), 0 0 35px rgba(212, 175, 55, 0.6);
+  }
+  100% {
+    transform: scale(0.95);
+    box-shadow: 0 0 0 0 rgba(6, 182, 212, 0), 0 0 20px rgba(212, 175, 55, 0.4);
+  }
+}
+
+.animate-radar-pulse {
+  animation: radar-pulse-wave 2.5s infinite ease-in-out;
+}
+
+/* Specular Card Border Gradient */
+.specular-border {
+  position: relative;
+}
+
+.specular-border::before {
+  content: '';
+  position: absolute;
+  inset: -1px;
+  border-radius: inherit;
+  padding: 1px;
+  background: linear-gradient(135deg, rgba(212, 175, 55, 0.4) 0%, rgba(99, 102, 241, 0.2) 50%, rgba(6, 182, 212, 0.3) 100%);
+  -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+  mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+  pointer-events: none;
+}
+
+/* 3D Tilt Card Elevation */
+.card-tilt-hover {
+  transition: transform 0.3s var(--ease-spring), box-shadow 0.3s var(--ease-spring);
+}
+
+.card-tilt-hover:hover {
+  transform: translateY(-3px) scale(1.01);
+  box-shadow: 0 15px 30px -5px rgba(0, 0, 0, 0.5), 0 0 25px -5px rgba(99, 102, 241, 0.2);
+}
+
+/* Collapsible Section Spring Transition */
+.section-collapse-enter {
+  animation: section-expand 0.35s var(--ease-spring) forwards;
+}
+
+@keyframes section-expand {
+  from {
+    opacity: 0;
+    max-height: 0;
+    transform: translateY(-8px);
+  }
+  to {
+    opacity: 1;
+    max-height: 5000px;
+    transform: translateY(0);
+  }
+}
+
+/* Carousel Slide Transition */
+@keyframes slide-fade-in {
+  from {
+    opacity: 0;
+    transform: translateX(12px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+.animate-slide-fade {
+  animation: slide-fade-in 0.3s var(--ease-spring) forwards;
+}
+
+/* Radial Gauge Glow Pulse */
+@keyframes gauge-pulse {
+  0%, 100% {
+    filter: drop-shadow(0 0 8px rgba(212, 175, 55, 0.3));
+  }
+  50% {
+    filter: drop-shadow(0 0 16px rgba(212, 175, 55, 0.5));
+  }
+}
+
+.animate-gauge-pulse {
+  animation: gauge-pulse 3s infinite ease-in-out;
+}
+
+/* Scatter Plot Dot Hover Glow */
+.recharts-scatter-symbol:hover {
+  filter: drop-shadow(0 0 6px rgba(6, 182, 212, 0.6));
+}
+
+/* Custom Range Slider Track */
+input[type="range"] {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 6px;
+  background: rgba(255, 255, 255, 0.08);
+  border-radius: 9999px;
+  outline: none;
+  transition: background 0.2s ease;
+}
+
+input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  cursor: pointer;
+  border: 2px solid rgba(255, 255, 255, 0.2);
+  transition: transform 0.15s var(--ease-bounce), box-shadow 0.15s ease;
+}
+
+input[type="range"]::-webkit-slider-thumb:hover {
+  transform: scale(1.2);
+  box-shadow: 0 0 12px rgba(99, 102, 241, 0.4);
+}
+
+input[type="range"]::-webkit-slider-thumb:active {
+  transform: scale(0.95);
 }
 

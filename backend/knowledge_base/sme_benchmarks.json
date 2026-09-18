@@ -1,0 +1,67 @@
+{
+  "industry_benchmarks": {
+    "B2B_SaaS": {
+      "cac_payback_months_target": 12.0,
+      "ltv_cac_ratio_target": 4.5,
+      "gross_margin_target_percent": 82.0,
+      "annual_churn_rate_target_percent": 5.0,
+      "monthly_growth_rate_seed": 15.0,
+      "pricing_tiers_typical": {
+        "starter_monthly_usd": 299,
+        "growth_monthly_usd": 799,
+        "enterprise_floor_monthly_usd": 1999
+      },
+      "burn_multiple_target": 1.3
+    },
+    "B2C_Subscription": {
+      "cac_payback_months_target": 6.0,
+      "ltv_cac_ratio_target": 3.2,
+      "gross_margin_target_percent": 70.0,
+      "annual_churn_rate_target_percent": 18.0,
+      "monthly_growth_rate_seed": 20.0,
+      "pricing_tiers_typical": {
+        "starter_monthly_usd": 19,
+        "growth_monthly_usd": 49,
+        "enterprise_floor_monthly_usd": 149
+      },
+      "burn_multiple_target": 1.5
+    },
+    "FinTech": {
+      "cac_payback_months_target": 14.0,
+      "ltv_cac_ratio_target": 5.0,
+      "gross_margin_target_percent": 65.0,
+      "annual_churn_rate_target_percent": 6.0,
+      "monthly_growth_rate_seed": 18.0,
+      "pricing_tiers_typical": {
+        "starter_monthly_usd": 499,
+        "growth_monthly_usd": 1299,
+        "enterprise_floor_monthly_usd": 3999
+      },
+      "burn_multiple_target": 1.4
+    },
+    "HealthTech": {
+      "cac_payback_months_target": 16.0,
+      "ltv_cac_ratio_target": 5.5,
+      "gross_margin_target_percent": 75.0,
+      "annual_churn_rate_target_percent": 4.0,
+      "monthly_growth_rate_seed": 12.0,
+      "pricing_tiers_typical": {
+        "starter_monthly_usd": 599,
+        "growth_monthly_usd": 1499,
+        "enterprise_floor_monthly_usd": 4999
+      },
+      "burn_multiple_target": 1.2
+    }
+  },
+  "currency_rules": {
+    "United Kingdom": {"code": "GBP", "symbol": "£", "name": "British Pound"},
+    "UK": {"code": "GBP", "symbol": "£", "name": "British Pound"},
+    "Great Britain": {"code": "GBP", "symbol": "£", "name": "British Pound"},
+    "India": {"code": "INR", "symbol": "₹", "name": "Indian Rupee"},
+    "European Union": {"code": "EUR", "symbol": "€", "name": "Euro"},
+    "Germany": {"code": "EUR", "symbol": "€", "name": "Euro"},
+    "France": {"code": "EUR", "symbol": "€", "name": "Euro"},
+    "United States": {"code": "USD", "symbol": "$", "name": "US Dollar"},
+    "Global": {"code": "USD", "symbol": "$", "name": "US Dollar"}
+  }
+}
